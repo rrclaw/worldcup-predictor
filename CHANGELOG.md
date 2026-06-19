@@ -31,8 +31,8 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 - **`cli bet` subcommand**. Reads the latest predictions, drafts a stake-sized
   slate against the live per-match 1X2 market, and logs each slate to
   `reports/bets/<date>.json` for later settlement by `cli review`.
-- `tests/` directory with 18 unit tests covering AH/OU derivation and Kelly
-  discipline (`PYTHONPATH=. python tests/test_*.py`).
+- `tests/` directory with 26 unit tests covering AH/OU derivation, Kelly
+  discipline, and walk-forward market metrics (`PYTHONPATH=. python tests/test_*.py`).
 - `docs/competitor_analysis.md` — horizontal review of 9 GitHub
   worldcup-predictor projects, anchoring the optimization backlog.
 

@@ -11,11 +11,17 @@ surface where the model *disagrees* with the market as the interesting signal.
 
 ## What it outputs
 
-- **Per match:** 1X2 (win/draw/loss), full scoreline distribution, over/under, both-teams-to-score.
+- **Per match:** 1X2 (win/draw/loss), full scoreline distribution, **Asian Handicap** ladder,
+  **Over/Under** ladder, both-teams-to-score. AH/OU prices are derived analytically from the
+  Dixon-Coles score grid (no extra fitting), with integer / half / quarter lines and explicit
+  push handling.
 - **Tournament:** Monte Carlo simulation (≥50k runs) over the full bracket → group-advancement,
   per-round survival, and title-winning probabilities for every team.
 - **Live:** during the tournament, a daily pipeline pulls fresh odds, prediction-market prices,
   injuries/lineups and weather, re-runs predictions, and tracks realized accuracy (RPS/Brier).
+- **Bet slate:** `cli bet` drafts a stake-sized recommendation list against the live market
+  using a quarter-Kelly portfolio sizer with a per-market acceptance whitelist (only
+  walk-forward-validated markets can carry stakes — see `reports/backtests/FINDINGS.md`).
 
 ## Model
 
@@ -36,6 +42,9 @@ surface where the model *disagrees* with the market as the interesting signal.
 - **Metrics:** RPS (the standard for football 1X2), Brier, log-loss, calibration curves.
 - **Baselines to beat:** raw market odds and pure-ELO. A factor is kept only if it shows a stable
   positive contribution in walk-forward; low-sample factors are flagged as low-confidence.
+- **Per-market acceptance** (Run 27): a derived market (AH line, OU line) can only carry bets
+  after it beats a no-skill baseline on Brier in walk-forward. AH ±0.5 / ±1.5 cleared; OU 1.5
+  is empirically anti-skill and is hard-blocked in `cli bet`.
 
 ## Data sources (all free / no-key by default)
 
@@ -79,7 +88,20 @@ cp .env.example .env   # fill in free keys (football-data.org, optionally Kaggle
 PYTHONPATH=. python -m skill.helpers.cli fetch --all
 PYTHONPATH=. python -m skill.helpers.cli predict --all --simulate
 PYTHONPATH=. python -m skill.helpers.cli backtest --start 2010-01-01 --end 2026-05-31
+
+# Walk-forward calibration of the derived AH/OU markets:
+PYTHONPATH=. python -m skill.helpers.cli backtest --markets --start 2018-01-01 --end 2024-12-31
+
+# Daily bet slate (Quarter Kelly, per-market whitelist enforced):
+PYTHONPATH=. python -m skill.helpers.cli bet --bankroll 10000
+
+# Run unit tests (26 tests across derived_markets, kelly, walkforward_markets):
+PYTHONPATH=. python tests/test_derived_markets.py
+PYTHONPATH=. python tests/test_kelly.py
+PYTHONPATH=. python tests/test_walkforward_markets.py
 ```
+
+See [`CHANGELOG.md`](CHANGELOG.md) for behaviour changes between releases.
 
 ## License
 
