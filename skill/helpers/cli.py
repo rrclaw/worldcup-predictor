@@ -266,6 +266,7 @@ def _todays_lineup_absences(squads: dict | None) -> dict:
 def _predict_one(model, row, squads=None, ctx=None, match_markets=None, absences=None) -> dict:
     import numpy as np
 
+    from ..model import derived_markets as derived
     from ..model import dixon_coles as dc
     from ..model import market as mkt
     from ..model.players import match_scorers
@@ -302,6 +303,12 @@ def _predict_one(model, row, squads=None, ctx=None, match_markets=None, absences
         # vs blend on real matches — the forward evidence MARKET_WEIGHT never had.
         mp["model_1x2"] = [round(float(x), 4) for x in p_model]
         mp["edge"] = [round(float(x), 4) for x in (p_final - p_mkt)]
+    # AH / OU fair prices derived analytically from the DC score grid (P0.2a).
+    # The market lookup (P0.2b: Pinnacle via The Odds API) is deferred — until
+    # then `derived` is the model's own fair price, surfaced as model-vs-model edge.
+    lam_h_post, lam_a_post = (mp["lambda_home"], mp["lambda_away"])  # already context-multiplied
+    mp["derived"] = derived.derive_all(lam_h_post, lam_a_post, model.rho)
+
     if squads:
         lam_h, lam_a = model.lambdas(home, away, neutral)
         # apply only THIS matchup's confirmed XI (not the teams' other fixtures)
@@ -901,6 +908,74 @@ def _cmd_publish(args):
           f"market={'yes' if data.get('market_title') else 'no'})")
 
 
+def _cmd_bet(args):
+    """Generate today's recommended bet slate from the latest predictions.
+
+    Reads `reports/<date>/predictions.json` (or today's by default), turns each
+    fixture's derived AH/OU lines into Opportunities at the *fair* odds, and
+    runs the portfolio Kelly engine. Without a real bookmaker feed (P0.2b is
+    deferred), edge is always zero against the fair price — so the slate is
+    empty by design until either a live odds source is wired or the user
+    overrides with `--use-model-edge` to bet against an external odds CSV.
+    """
+    from ..bet import kelly as kellymod
+
+    rep = paths.report_dir(args.date)
+    preds_f = rep / "predictions.json"
+    if not preds_f.exists():
+        print(f"no predictions at {preds_f} — run `predict --all` first", file=sys.stderr)
+        sys.exit(1)
+    preds = json.loads(preds_f.read_text())
+
+    ops: list[kellymod.Opportunity] = []
+    for p in preds:
+        if p.get("error") or "derived" not in p:
+            continue
+        match = f"{p['home']} vs {p['away']}"
+        # 1X2 bets vs the live per-match market (when present)
+        if p.get("market_1x2"):
+            for i, side in enumerate(("home", "draw", "away")):
+                p_model = (p["p_home"], p["p_draw"], p["p_away"])[i]
+                p_market = p["market_1x2"][i]
+                if p_market <= 0:
+                    continue
+                ops.append(kellymod.Opportunity(
+                    label=f"{match} · 1X2 {side}",
+                    p_win=p_model, decimal_odds=1.0 / p_market, p_market=p_market,
+                ))
+        # AH / OU: model probabilities only (P0.2b will add real odds)
+        # — until then skip these to avoid betting against ourselves at fair.
+    out = kellymod.portfolio_kelly(ops, bankroll=args.bankroll)
+
+    bets_dir = paths.REPORTS / "bets"
+    bets_dir.mkdir(exist_ok=True)
+    log_f = bets_dir / f"{rep.name}.json"
+    log_f.write_text(json.dumps({
+        "date": rep.name, "bankroll": args.bankroll,
+        "discipline": {
+            "fraction": kellymod.DEFAULT_KELLY_FRACTION,
+            "max_per_bet": kellymod.DEFAULT_MAX_PER_BET,
+            "max_total": kellymod.DEFAULT_MAX_TOTAL,
+            "edge_threshold": kellymod.DEFAULT_EDGE_THRESHOLD,
+        },
+        "bets": out,
+    }, indent=2, ensure_ascii=False))
+
+    if not out:
+        print(f"no bets meet the discipline gates "
+              f"(edge ≥ {kellymod.DEFAULT_EDGE_THRESHOLD:.0%}, "
+              f"fraction ≥ {kellymod.DEFAULT_MIN_FRACTION:.1%}). Slate empty.")
+        print(f"logged → {log_f}")
+        return
+    total = sum(r["stake"] for r in out)
+    print(f"{'Bet':<60}{'p_win':>8}{'odds':>7}{'edge':>8}{'stake':>10}")
+    for r in out:
+        print(f"{r['label'][:58]:<60}{r['p_win']:>8.3f}{r['decimal_odds']:>7.2f}"
+              f"{r['edge']*100:>7.1f}%{r['stake']:>10.2f}")
+    print(f"{'TOTAL':<60}{'':>8}{'':>7}{'':>8}{total:>10.2f}")
+    print(f"\nlogged → {log_f}")
+
+
 def _cmd_backtest(args):
     from ..backtest import walkforward
 
@@ -950,6 +1025,11 @@ def main(argv=None):
     pp2 = sub.add_parser("portraits")
     pp2.add_argument("--topk", type=int, default=10)
     pp2.set_defaults(func=_cmd_portraits)
+
+    pbet = sub.add_parser("bet", help="Recommended bet slate from latest predictions")
+    pbet.add_argument("--date", default=None, help="Report date (default: today)")
+    pbet.add_argument("--bankroll", type=float, default=10000.0)
+    pbet.set_defaults(func=_cmd_bet)
 
     pb = sub.add_parser("backtest")
     pb.add_argument("--start", default="2010-01-01")
