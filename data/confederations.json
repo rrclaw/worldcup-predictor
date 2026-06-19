@@ -1,0 +1,60 @@
+{
+  "_meta": {
+    "purpose": "Country -> FIFA confederation mapping for the cross-confederation strength gap factor (P1.1).",
+    "source": "FIFA member associations 2024 (https://www.fifa.com/about-fifa/organisation/associations).",
+    "convention": "Keys match team names as used by martj42/international_results.csv (the project's training source).",
+    "missing_country_policy": "If a country is not listed here, the ablation treats it as `None` and skips it from the cross-confederation evidence — same fail-closed convention as MARKET_WHITELIST."
+  },
+  "UEFA": [
+    "Albania", "Andorra", "Armenia", "Austria", "Azerbaijan", "Belarus", "Belgium",
+    "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Czechia",
+    "Denmark", "England", "Estonia", "Faroe Islands", "Finland", "France", "Georgia",
+    "Germany", "Gibraltar", "Greece", "Hungary", "Iceland", "Israel", "Italy", "Kazakhstan",
+    "Kosovo", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Moldova",
+    "Montenegro", "Netherlands", "North Macedonia", "Northern Ireland", "Norway", "Poland",
+    "Portugal", "Republic of Ireland", "Ireland", "Romania", "Russia", "San Marino",
+    "Scotland", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland",
+    "Türkiye", "Turkey", "Ukraine", "Wales", "Yugoslavia", "Soviet Union", "East Germany",
+    "Czechoslovakia", "Serbia and Montenegro", "FR Yugoslavia"
+  ],
+  "CONMEBOL": [
+    "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador", "Paraguay",
+    "Peru", "Uruguay", "Venezuela"
+  ],
+  "CONCACAF": [
+    "Antigua and Barbuda", "Aruba", "Bahamas", "Barbados", "Belize", "Bermuda",
+    "Canada", "Cayman Islands", "Costa Rica", "Cuba", "Curaçao", "Curacao", "Dominica",
+    "Dominican Republic", "El Salvador", "Grenada", "Guatemala", "Guyana", "Haiti",
+    "Honduras", "Jamaica", "Martinique", "Mexico", "Montserrat", "Nicaragua", "Panama",
+    "Puerto Rico", "Saint Kitts and Nevis", "Saint Lucia", "Saint Martin",
+    "Saint Vincent and the Grenadines", "Sint Maarten", "Suriname",
+    "Trinidad and Tobago", "Turks and Caicos Islands", "United States",
+    "United States Virgin Islands", "British Virgin Islands"
+  ],
+  "AFC": [
+    "Afghanistan", "Australia", "Bahrain", "Bangladesh", "Bhutan", "Brunei", "Cambodia",
+    "China PR", "China", "Chinese Taipei", "Taiwan", "Guam", "Hong Kong", "India",
+    "Indonesia", "Iran", "Iraq", "Japan", "Jordan", "Korea Republic", "South Korea",
+    "Korea DPR", "North Korea", "Kuwait", "Kyrgyzstan", "Laos", "Lebanon", "Macau",
+    "Malaysia", "Maldives", "Mongolia", "Myanmar", "Nepal", "Oman", "Pakistan",
+    "Palestine", "Philippines", "Qatar", "Saudi Arabia", "Singapore", "Sri Lanka",
+    "Syria", "Tajikistan", "Thailand", "Timor-Leste", "East Timor", "Turkmenistan",
+    "United Arab Emirates", "Uzbekistan", "Vietnam", "Yemen"
+  ],
+  "CAF": [
+    "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi", "Cameroon",
+    "Cape Verde", "Cabo Verde", "Central African Republic", "Chad", "Comoros",
+    "DR Congo", "Congo DR", "Congo", "Côte d'Ivoire", "Ivory Coast", "Djibouti",
+    "Egypt", "Equatorial Guinea", "Eritrea", "Eswatini", "Swaziland", "Ethiopia",
+    "Gabon", "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Kenya", "Lesotho",
+    "Liberia", "Libya", "Madagascar", "Malawi", "Mali", "Mauritania", "Mauritius",
+    "Morocco", "Mozambique", "Namibia", "Niger", "Nigeria", "Rwanda",
+    "São Tomé and Príncipe", "Sao Tome and Principe", "Senegal", "Seychelles",
+    "Sierra Leone", "Somalia", "South Africa", "South Sudan", "Sudan", "Tanzania",
+    "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe", "Zaïre", "Zaire"
+  ],
+  "OFC": [
+    "American Samoa", "Cook Islands", "Fiji", "New Caledonia", "New Zealand",
+    "Papua New Guinea", "Samoa", "Solomon Islands", "Tahiti", "Tonga", "Vanuatu"
+  ]
+}

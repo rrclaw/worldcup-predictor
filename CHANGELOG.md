@@ -14,6 +14,31 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 ## [Unreleased]
 
 ### Added
+- **Cross-confederation strength gap factor** (`skill/model/confederations.py`,
+  `data/confederations.json`). The DC fit, calibrated mostly on intra-confed
+  matches, systematically under-prices the strength gap when UEFA / CONMEBOL
+  meet other confederations; a symmetric ±0.075 log-lambda shift corrects it.
+  Wired into `context.py` and surfaced as a per-fixture note. (P1.1, Run 28)
+- 9 new unit tests in `tests/test_confederations.py` covering country lookup,
+  alias coverage, the strong-vs-weak adjustment, and same-confed no-op behaviour.
+
+### Backtest
+- **Run 28** (FINDINGS.md) — cross-confederation gap on majors 2010-2024
+  (n=212 cross-confed matches). Monotonically better at every tested gap
+  (0.05 → 0.30), peak Δ −0.00234 at gap=0.20-0.22. Adopted gap=0.15 (inside
+  tested-good range, conservative against single-sample peak overfitting,
+  matching Run 12's discipline). Magnitude is 1-2 orders larger than the
+  rest factor and same band as talent / FC25 / 3-year window.
+
+---
+
+## [0.1.0] — 2026-06-19
+
+First versioned release: pivot from descriptive 1X2 forecasts to stake-ready
+Asian Handicap / Over-Under bet slates. Merged in PR #1
+(`feat/asian-handicap-kelly`).
+
+### Added
 - **Walk-forward AH/OU calibration backtest** (`skill/backtest/walkforward_markets.py`)
   with `cli backtest --markets`. Tests Brier / log-loss / ECE per line vs a
   no-skill base-rate baseline. (P1.3)
