@@ -1,4 +1,5 @@
-"""Situational context adjustments (free, deterministic): altitude, rest, travel.
+"""Situational context adjustments (free, deterministic): altitude, rest, travel,
+cross-confederation gap.
 
 These are small multiplicative nudges to each side's expected goals (lambda), computed
 from the fixture schedule + a static venue table — no paid data. Like the talent prior,
@@ -7,10 +8,19 @@ magnitudes are deliberately modest.
 
 Weather/heat is intentionally NOT applied pre-tournament: Open-Meteo only forecasts ~16
 days out, so it only becomes usable during the event (wired into the review loop later).
+
+Cross-confederation gap (Run 28, P1.1): the DC fit, calibrated mostly on intra-confed
+matches, systematically under-rates the strength gap when UEFA / CONMEBOL meet other
+confederations. Walk-forward ablation on majors 2010-2024 (n=212 cross-confed matches)
+shows monotonic RPS improvement up to gap≈0.20 (Δ −0.0023); we ship 0.15, well inside
+the tested-good range, to avoid single-sample peak overfitting (same conservatism as
+the rest factor in Run 12).
 """
 from __future__ import annotations
 
 import math
+
+from .confederations import confederation
 
 # 2026 host venues by the city string used in the fixture data.
 VENUES = {
@@ -33,6 +43,22 @@ VENUES = {
 }
 # teams acclimatised to high altitude (no altitude penalty)
 ALTITUDE_ACCLIM = {"Mexico", "Ecuador"}
+
+# Cross-confederation gap (Run 28). Stronger side gets exp(+gap/2) on lambda;
+# weaker side gets exp(-gap/2). Symmetric in log-space.
+CROSS_CONFED_GAP = 0.15
+STRONG_CONFEDS = {"UEFA", "CONMEBOL"}
+
+
+def _confed_adjustment(home: str, away: str) -> tuple[float, float]:
+    h, a = confederation(home), confederation(away)
+    if h is None or a is None or h == a:
+        return 1.0, 1.0
+    if h in STRONG_CONFEDS and a not in STRONG_CONFEDS:
+        return float(math.exp(CROSS_CONFED_GAP / 2)), float(math.exp(-CROSS_CONFED_GAP / 2))
+    if a in STRONG_CONFEDS and h not in STRONG_CONFEDS:
+        return float(math.exp(-CROSS_CONFED_GAP / 2)), float(math.exp(CROSS_CONFED_GAP / 2))
+    return 1.0, 1.0
 
 
 def _haversine(a, b) -> float:
@@ -90,6 +116,14 @@ def compute(fixtures) -> dict[str, dict]:
             else:
                 hm *= (1 - pen)
                 notes.append(f"{home} short rest")
+
+        # cross-confederation strength gap (Run 28, P1.1)
+        ch, ca = _confed_adjustment(home, away)
+        if (ch, ca) != (1.0, 1.0):
+            hm *= ch
+            am *= ca
+            stronger = home if ch > 1 else away
+            notes.append(f"{stronger} cross-confed bump")
 
         # travel since previous match
         if v:

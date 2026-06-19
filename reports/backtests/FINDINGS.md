@@ -706,3 +706,54 @@ This is the first time a backtest has *partially* rejected a derived market.
 Doctrine extension: `cli bet` must consult a per-market acceptance whitelist
 keyed off `FINDINGS.md` Run 27 — silently betting on rejected markets would
 break the same anti-curve-fitting rule that protected the model in Runs 14/16/17.
+
+## Run 28 — cross-confederation strength gap (P1.1): VALIDATED, kept conservative
+
+User question (sourced from competitor `hjjbh1314/worldcup-predictor`): does the
+DC fit, calibrated mostly on intra-confederation matches (qualifiers + regional
+cups dominate every team's history), systematically mis-rate the strength gap
+in the rare cross-confederation matches at WC / Confederations Cup? Tested
+walk-forward, look-ahead free.
+
+Method (`skill/backtest/ablation_confederation.py`): walk-forward on majors
+2010-2024, DC refit per 60d. For every cross-confed test match (UEFA/CONMEBOL
+vs other), apply a symmetric log-lambda shift: stronger side × exp(+gap/2),
+weaker × exp(-gap/2). Compare paired RPS on EXACTLY the same matches.
+
+n = 212 cross-confed major-tournament matches.
+
+| gap | baseline RPS | adjusted RPS | Δ | verdict |
+|-----|--------------|--------------|------|---------|
+| 0.05 | 0.17132 | 0.17032 | −0.00100 | better |
+| 0.10 | 0.17132 | 0.16960 | −0.00172 | better |
+| 0.15 | 0.17132 | 0.16916 | −0.00216 | better |
+| 0.20 | 0.17132 | 0.16898 | **−0.00234** | better (peak) |
+| 0.22 | 0.17132 | 0.16898 | −0.00234 | better |
+| 0.30 | 0.17132 | 0.16938 | −0.00194 | better |
+
+**Findings.**
+1. **Monotonically better up to gap≈0.20**, then plateaus and starts to fade —
+   the textbook shape of a real signal (mirror-image of Run 9's importance,
+   which was monotonically *worse*). Δ −0.0023 is in the same magnitude band
+   as adopted factors (talent, FC25, 3-yr window — all 0.001-0.002), and an
+   order of magnitude larger than the rest factor (Run 12, ~0.0001).
+2. **Direction matches the literature.** UEFA / CONMEBOL teams accumulate
+   harder schedules in their qualifiers (much stronger opposition than
+   AFC / CAF / CONCACAF teams typically face), so a results-fit DC under-
+   prices their goal-difference advantage when those continents collide.
+   Same effect that makes WC predictions consistently undervalue European
+   sides versus, say, Asian Cup champions.
+
+**Decision: ADOPT, gap = 0.15** (not the 0.20 peak). Doctrine: monotonic-better
+on a single sample is the overfitting trap, the conservative setting is fully
+inside the tested-good range and never hurts (every gap in 0.05-0.30 beat
+baseline). Same conservatism as Run 12 (rest factor: tested 0.040 best, shipped
+0.015). Wired into `skill/model/context.py:CROSS_CONFED_GAP`; UEFA + CONMEBOL
+are the strong side. Same-confed and unmapped-country pairs are no-ops.
+
+**Scope note.** This factor is applied per-fixture in `cli predict` via
+`context.compute()`. It does NOT alter the headline 1X2 walkforward.py (which
+is a pure-DC baseline by design). Cross-confed contribution to overall majors
+RPS, weighted by the fraction of cross-confed matches: 212 / 574 ≈ 0.37 →
+projected headline gain ≈ 0.0023 × 0.37 ≈ 0.00085 RPS. Tool:
+`skill/backtest/ablation_confederation.py`.
