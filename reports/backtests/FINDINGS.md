@@ -644,3 +644,65 @@ model) stays frozen — drift gate is "ok" at n=16 (p=0.27), no evidence to touc
 "optimisation" at this stage is *instrumented patience*: accumulate forward evidence, act only when
 two independent gates (forward ledger + backtest) agree. Verified: protocol returns accruing (<30),
 REVIEW only when forward-optimal beats current by the margin, ok when market≈model.
+
+## Run 27 — derived AH/OU calibration (P1.3): AH ADOPTED, OU MARGINAL (caution)
+
+After landing the analytic AH/OU derivation (P0.2a, commit 7d55c65) we had to
+verify the probabilities are well-calibrated before letting `cli bet` size
+stakes on them. Without a historical AH/OU odds archive we cannot compute ROI,
+but Brier / log-loss / ECE on the actual margin (X−Y) and total (X+Y) outcomes
+*is* walk-forward-testable today — the same evidence bar all other factors had to
+clear. Tool: `skill/backtest/walkforward_markets.py`.
+
+Setup: walk-forward on majors 2018-01-01 → 2024-12-31, n=574, ξ=0.001, 3y train,
+DC refit every 60d (same hyperparameters as the headline 1X2 backtest). Baseline
+= constant prediction equal to the empirical pre-test base rate (true no-skill).
+
+| Market | n | base | M_brier | B_brier | ΔBrier | M_acc | B_acc | ΔAcc |
+|--------|---|------|---------|---------|--------|-------|-------|------|
+| AH-1.5 | 574 | 0.204 | 0.14224 | 0.16958 | **−0.0273** | 0.808 | 0.796 | +1.2pp |
+| AH-0.5 | 574 | 0.416 | 0.20010 | 0.24880 | **−0.0487** | 0.681 | 0.584 | +9.7pp |
+| AH+0.5 | 574 | 0.686 | 0.17211 | 0.21633 | **−0.0442** | 0.751 | 0.686 | +6.5pp |
+| AH+1.5 | 574 | 0.868 | 0.09428 | 0.11495 | **−0.0207** | 0.869 | 0.868 | +0.1pp |
+| OU 1.5 | 574 | 0.683 | 0.22658 | 0.22123 | **+0.0053** | 0.645 | 0.683 | −3.8pp |
+| OU 2.5 | 574 | 0.430 | 0.25232 | 0.25533 | −0.0030 | 0.566 | 0.430 | +13.6pp |
+| OU 3.5 | 574 | 0.227 | 0.17589 | 0.18675 | −0.0109 | 0.775 | 0.773 | +0.2pp |
+
+**Findings.**
+1. **Asian Handicap is solid.** All 4 lines beat the no-skill baseline on Brier
+   (Δ −0.020 to −0.049, monotonically larger near `line=0`). Pick accuracy
+   improvement is largest at the most-uncertain lines (AH-0.5 +9.7pp, AH+0.5
+   +6.5pp), exactly where any usable signal lives. AH ECE 0.013-0.030, comparable
+   to the 1X2 model's ECE 0.0144 (Run 23). **Verdict: AH cleared the doctrine bar
+   and is approved for `cli bet` once P0.2b lands a real odds feed.**
+2. **Over/Under is marginal at best, FAILED at OU 1.5.** OU 1.5 model Brier is
+   0.0053 *worse* than the constant-base-rate baseline (and accuracy −3.8pp).
+   OU 2.5 / OU 3.5 beat baseline only by 0.003-0.011 — within noise, far below
+   the 0.020+ AH improvement and below the validated factors' typical ~0.001-0.002
+   RPS deltas. ECE on OU is also degraded (0.054-0.089 vs AH 0.013-0.030),
+   confirming OU probabilities are not as well calibrated.
+3. **Why OU underperforms.** The DC fit (Run 21) is calibrated for total goals
+   (avg 2.78 in training ≈ 2.76 actual), but the *variance* of total goals is
+   harder to pin down than its mean: friendly-heavy training data plus the
+   compressed-variance environment of major tournaments means the model's tail
+   predictions (OU 1.5 → home goals run too low; OU 3.5 → high-scoring blowouts)
+   drift from the data-generating process. Constantinou (2022) reports the same
+   pattern — Asian-Handicap markets are more model-tractable than goal-totals.
+
+**Decisions.**
+- **Approve AH for `cli bet`** once P0.2b wires a real odds feed; the Kelly
+  engine can size AH stakes with confidence.
+- **Restrict OU to the 2.5 line and quarter-Kelly only** when betting (the line
+  with the smallest base-rate-bias and the lone non-negative Brier delta among
+  the standard OU triad). Skip OU 1.5 entirely; the model is empirically
+  *anti-skill* there. OU 3.5 is permitted but flagged low-confidence.
+- **No factor change** is required — the DC model itself is fine; the
+  derivation is mechanically correct. The OU softness is a property of total-
+  goals variance, not a bug. Future work (P3): re-test OU calibration after the
+  Bayesian shootout model (P1.2) lands, since extra-time/penalty totals leak
+  into 90-min OU at the knockout stage.
+
+This is the first time a backtest has *partially* rejected a derived market.
+Doctrine extension: `cli bet` must consult a per-market acceptance whitelist
+keyed off `FINDINGS.md` Run 27 — silently betting on rejected markets would
+break the same anti-curve-fitting rule that protected the model in Runs 14/16/17.

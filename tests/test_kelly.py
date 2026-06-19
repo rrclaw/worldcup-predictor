@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from skill.bet.kelly import (
-    Opportunity, kelly_fraction, edge, portfolio_kelly,
+    Opportunity, kelly_fraction, edge, portfolio_kelly, is_whitelisted,
     DEFAULT_KELLY_FRACTION, DEFAULT_MAX_PER_BET,
 )
 
@@ -62,6 +62,26 @@ def test_portfolio_total_cap():
 def test_default_quarter_kelly():
     """Sanity: default fraction is quarter Kelly."""
     assert DEFAULT_KELLY_FRACTION == 0.25
+
+
+def test_whitelist_rejects_ou15():
+    """FINDINGS Run 27: OU 1.5 was anti-skill in walk-forward, must fail closed."""
+    assert is_whitelisted("ou_1.5") is False
+    assert is_whitelisted("ah_minus_0.5") is True
+    assert is_whitelisted("1x2") is True
+    assert is_whitelisted("unknown_market") is False
+
+
+def test_portfolio_drops_rejected_market():
+    """Even an enormous-edge bet on a rejected market must be silently dropped."""
+    ops = [
+        Opportunity("OU 1.5 win", p_win=0.99, decimal_odds=2.0, market="ou_1.5"),
+        Opportunity("AH -0.5 win", p_win=0.6, decimal_odds=2.0, market="ah_minus_0.5"),
+    ]
+    out = portfolio_kelly(ops, bankroll=10000)
+    labels = [r["label"] for r in out]
+    assert "OU 1.5 win" not in labels
+    assert "AH -0.5 win" in labels
 
 
 if __name__ == "__main__":

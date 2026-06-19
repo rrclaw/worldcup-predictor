@@ -14,6 +14,12 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 ## [Unreleased]
 
 ### Added
+- **Walk-forward AH/OU calibration backtest** (`skill/backtest/walkforward_markets.py`)
+  with `cli backtest --markets`. Tests Brier / log-loss / ECE per line vs a
+  no-skill base-rate baseline. (P1.3)
+- **Per-market acceptance whitelist** in `skill/bet/kelly.py`. Markets that
+  fail walk-forward calibration cannot be bet on, regardless of any individual
+  edge — same anti-curve-fitting rule as Runs 14/16/17.
 - **Asian Handicap & Over/Under fair-price derivation** (`skill/model/derived_markets.py`).
   Integrates the existing Dixon-Coles score grid into AH/OU probabilities and
   EV-zero fair odds. Supports integer / half / quarter lines with push handling.
@@ -33,6 +39,14 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 ### Changed
 - `_predict_one` now attaches `derived` (the full AH/OU ladder) to every
   fixture's prediction record. Existing fields are unchanged.
+
+### Backtest
+- **Run 27** (FINDINGS.md) — derived AH/OU calibration on majors 2018-2024
+  (n=574). All four Asian Handicap lines (-1.5, -0.5, +0.5, +1.5) beat the
+  no-skill baseline on Brier by 0.020-0.049 with comparable ECE; **AH ADOPTED**
+  for `cli bet`. Over/Under is marginal: OU 1.5 is *anti-skill* (Brier 0.005
+  worse than baseline) and **REJECTED**; OU 2.5 / OU 3.5 are accepted with
+  low-confidence flags. Whitelist enforces the decision in code.
 
 ### Deferred
 - **Live Pinnacle AH/OU feed** (P0.2b). Pinnacle's official API was closed to

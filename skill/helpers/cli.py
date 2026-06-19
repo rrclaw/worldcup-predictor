@@ -977,15 +977,23 @@ def _cmd_bet(args):
 
 
 def _cmd_backtest(args):
-    from ..backtest import walkforward
-
     results = data_loader.load_results()
-    out = walkforward.run(
-        results, start=args.start, end=args.end,
-        refit_days=args.refit_days, majors_only=not args.all_matches,
-        xi=args.xi, verbose=False,
-    )
-    fname = f"backtest_{args.start}_{args.end}_xi{args.xi}.json"
+    if args.markets:
+        from ..backtest import walkforward_markets
+        out = walkforward_markets.run(
+            results, start=args.start, end=args.end,
+            refit_days=args.refit_days, majors_only=not args.all_matches,
+            xi=args.xi, verbose=False,
+        )
+        fname = f"backtest_markets_{args.start}_{args.end}_xi{args.xi}.json"
+    else:
+        from ..backtest import walkforward
+        out = walkforward.run(
+            results, start=args.start, end=args.end,
+            refit_days=args.refit_days, majors_only=not args.all_matches,
+            xi=args.xi, verbose=False,
+        )
+        fname = f"backtest_{args.start}_{args.end}_xi{args.xi}.json"
     (paths.BACKTESTS / fname).write_text(json.dumps(out, indent=2, ensure_ascii=False))
     print(json.dumps(out, indent=2, ensure_ascii=False))
 
@@ -1037,6 +1045,8 @@ def main(argv=None):
     pb.add_argument("--xi", type=float, default=0.0010)
     pb.add_argument("--refit-days", type=int, default=60, dest="refit_days")
     pb.add_argument("--all-matches", action="store_true", dest="all_matches")
+    pb.add_argument("--markets", action="store_true",
+                    help="Backtest derived AH/OU calibration instead of 1X2")
     pb.set_defaults(func=_cmd_backtest)
 
     args = p.parse_args(argv)

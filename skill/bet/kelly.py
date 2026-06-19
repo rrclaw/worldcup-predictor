@@ -24,6 +24,30 @@ DEFAULT_MAX_TOTAL = 0.30        # 30% bankroll
 DEFAULT_EDGE_THRESHOLD = 0.03   # 3 percentage points
 DEFAULT_MIN_FRACTION = 0.005    # 0.5% bankroll
 
+# Per-market acceptance whitelist (FINDINGS.md Run 27 — P1.3).
+# Markets that failed walk-forward calibration cannot be bet on regardless of
+# how attractive any single edge looks: refusing them is the same anti-curve-
+# fitting rule that protected the model in Runs 14/16/17.
+MARKET_WHITELIST = {
+    "1x2": True,         # validated headline metric (Run 23, ECE 0.0144)
+    "ah_minus_1.5": True,
+    "ah_minus_0.5": True,
+    "ah_plus_0.5": True,
+    "ah_plus_1.5": True,
+    "ou_1.5": False,     # REJECTED — model Brier 0.005 worse than no-skill baseline
+    "ou_2.5": True,      # marginally accepted; flag low-confidence in cli bet
+    "ou_3.5": True,      # accepted but low-confidence
+}
+
+
+def is_whitelisted(market: str) -> bool:
+    """Return True iff `market` is approved for stake sizing.
+
+    Unknown markets default to False (fail closed) — adding a new market
+    requires a backtest entry in FINDINGS.md and an explicit whitelist line.
+    """
+    return MARKET_WHITELIST.get(market.lower(), False)
+
 
 @dataclass
 class Opportunity:
@@ -31,6 +55,7 @@ class Opportunity:
     p_win: float         # model's calibrated win probability
     decimal_odds: float  # market decimal odds (or fair odds when no market)
     p_market: float | None = None  # de-vigged implied market prob, if known
+    market: str = "1x2"  # whitelist key — see MARKET_WHITELIST
 
 
 def kelly_fraction(p: float, decimal_odds: float, fraction: float = DEFAULT_KELLY_FRACTION) -> float:
@@ -77,6 +102,8 @@ def portfolio_kelly(
     """
     accepted = []
     for op in opportunities:
+        if not is_whitelisted(op.market):
+            continue   # FINDINGS Run 27: rejected markets fail closed
         e = edge(op.p_win, op.decimal_odds)
         if e < edge_threshold:
             continue
@@ -85,7 +112,8 @@ def portfolio_kelly(
         if f < min_fraction:
             continue
         accepted.append({
-            "label": op.label, "p_win": round(op.p_win, 4),
+            "label": op.label, "market": op.market,
+            "p_win": round(op.p_win, 4),
             "decimal_odds": op.decimal_odds, "edge": round(e, 4),
             "kelly_fraction": round(f, 4),
         })
