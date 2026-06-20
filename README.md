@@ -22,6 +22,10 @@ surface where the model *disagrees* with the market as the interesting signal.
 - **Bet slate:** `cli bet` drafts a stake-sized recommendation list against the live market
   using a quarter-Kelly portfolio sizer with a per-market acceptance whitelist (only
   walk-forward-validated markets can carry stakes — see `reports/backtests/FINDINGS.md`).
+- **Dashboard betting panel:** today's slate, cumulative P&L, ROI, and max drawdown are
+  surfaced on the public dashboard (`site/index.html`). Each settled match is reconciled
+  against the actual result in the next `cli publish` run; no live tournament results are
+  required for the panel to render gracefully.
 
 ## Model
 
@@ -29,9 +33,11 @@ surface where the model *disagrees* with the market as the interesting signal.
    blended with prediction-market prices by liquidity → `P_market`.
 2. **Statistical model** — Dixon-Coles bivariate Poisson with low-score correction and exponential
    time decay (ξ tuned by backtest); ELO rating difference as an attack/defence prior → `P_model`.
-3. **Context layer** — small multiplicative adjustments to expected goals λ for altitude, extreme
-   heat, rest-day differential, travel distance, and key absences. Adjustment magnitudes are
-   constrained by the backtest to avoid hand-tuned overfitting.
+3. **Context layer** — small multiplicative adjustments to expected goals λ for altitude,
+   rest-day differential, travel distance, key absences, and the cross-confederation
+   strength gap (UEFA / CONMEBOL teams systematically under-priced when they meet sides
+   from other confederations — Run 28). Adjustment magnitudes are constrained by the
+   backtest; weather was tested on 1642 matches and rejected (Run 19/20).
 4. **Ensemble + calibration** — `P_final = w·P_market + (1-w)·P_model_adj`, with `w` fit on
    calibration metrics, then isotonic calibration. `edge = P_final − P_market`.
 
@@ -45,6 +51,10 @@ surface where the model *disagrees* with the market as the interesting signal.
 - **Per-market acceptance** (Run 27): a derived market (AH line, OU line) can only carry bets
   after it beats a no-skill baseline on Brier in walk-forward. AH ±0.5 / ±1.5 cleared; OU 1.5
   is empirically anti-skill and is hard-blocked in `cli bet`.
+- **Penalty shootouts are a fair coin** (Run 29): the prior strength-weighted formulation was
+  empirically anti-skill on n=231 actual shootouts (Brier 0.2683 vs coin's 0.2500); a Bayesian
+  team-skill prior (n=339 shrinkage sweep) is also worse than a coin. No team-level shootout
+  skill is recoverable from the available samples — fair 50/50 it is.
 
 ## Data sources (all free / no-key by default)
 
@@ -95,10 +105,9 @@ PYTHONPATH=. python -m skill.helpers.cli backtest --markets --start 2018-01-01 -
 # Daily bet slate (Quarter Kelly, per-market whitelist enforced):
 PYTHONPATH=. python -m skill.helpers.cli bet --bankroll 10000
 
-# Run unit tests (26 tests across derived_markets, kelly, walkforward_markets):
-PYTHONPATH=. python tests/test_derived_markets.py
-PYTHONPATH=. python tests/test_kelly.py
-PYTHONPATH=. python tests/test_walkforward_markets.py
+# Run unit tests (44 tests across derived_markets, kelly, walkforward_markets,
+# confederations, shootout fair-coin guard, betting payload):
+for f in tests/test_*.py; do PYTHONPATH=. python "$f"; done
 ```
 
 See [`CHANGELOG.md`](CHANGELOG.md) for behaviour changes between releases.

@@ -13,6 +13,17 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 
 ## [Unreleased]
 
+### Added
+- **Dashboard betting panel** (`site/index.html`, `cli publish`). Today's bet
+  slate is surfaced with its Kelly stake, edge, and odds; cumulative P&L,
+  ROI, and max drawdown are computed by reconciling each settled bet against
+  the actual match result. Empty-slate, zero-history, and partial-settlement
+  cases all render gracefully — no live tournament data required. Bilingual
+  (EN / 中文) labels follow the existing i18n pattern. (P2.1)
+- 7 new unit tests in `tests/test_betting_payload.py` covering empty-state,
+  winning settlement, losing settlement, max-drawdown tracking, unsettled
+  matches, and AH/OU bets being skipped until P0.2b lands.
+
 ### Fixed
 - **Penalty-shootout coin is now fair (50/50)**, not strength-weighted by
   90-minute λ. Walk-forward on 231 actual post-2010 shootouts shows the
