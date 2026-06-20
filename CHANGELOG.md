@@ -13,6 +13,21 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 
 ## [Unreleased]
 
+### Fixed
+- **Penalty-shootout coin is now fair (50/50)**, not strength-weighted by
+  90-minute λ. Walk-forward on 231 actual post-2010 shootouts shows the
+  prior `lam/(lam+mu)` formulation was *anti-skill* (Brier 0.2683 vs coin's
+  0.2500, accuracy 0.489 vs 0.506) — see Run 29. Effect on tournament odds
+  is modest (shootouts are rare and roughly balanced) but every simulated
+  knockout tie was previously biased without evidence.
+
+### Investigated, not adopted
+- **Bayesian shootout skill prior** (P1.2 hypothesis from competitor
+  `dexorynlabs`). Walk-forward on n=339 historical shootouts: every tested
+  shrinkage strength α∈{0.5..50} is worse than a coin on Brier, raw win
+  rate is worst of all (Brier 0.2936). No team-level shootout skill is
+  recoverable from the available sample. (Run 29)
+
 ### Added
 - **Cross-confederation strength gap factor** (`skill/model/confederations.py`,
   `data/confederations.json`). The DC fit, calibrated mostly on intra-confed
