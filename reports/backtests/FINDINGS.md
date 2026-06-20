@@ -757,3 +757,68 @@ is a pure-DC baseline by design). Cross-confed contribution to overall majors
 RPS, weighted by the fraction of cross-confed matches: 212 / 574 ≈ 0.37 →
 projected headline gain ≈ 0.0023 × 0.37 ≈ 0.00085 RPS. Tool:
 `skill/backtest/ablation_confederation.py`.
+
+## Run 29 — penalty-shootout model (P1.2): three candidates ALL failed; reverted to fair coin
+
+User question (sourced from competitor `dexorynlabs-betting/2026-worldcup-prediction-market`):
+their writeup advertises a "Bayesian penalty-shootout model with 103 historical
+records replacing a 50/50 coin flip". Tested whether that helps THIS project
+before adopting. Audit also surfaced an orthogonal problem: the current
+`montecarlo._play` was NOT a fair coin — it weighted shootout outcomes by
+`lam/(lam+mu)`, i.e. used 90-minute attacking strength as penalty-shootout skill.
+
+Method (`scripts/explore_shootout_alpha.py`): walk-forward on
+`data/historical/shootouts.csv` (n=678, 1967-2026). Two evaluations:
+
+**(a) Bayesian shrinkage on the team's own shootout history (n=339 evaluation
+half).** Predict each shootout from the home/away team's prior wins-vs-games,
+shrunk to a 50% prior with strength α∈{0.5, 1, 2, 3, 5, 10, 20, 50}.
+
+| predictor | accuracy | Brier |
+|-----------|----------|-------|
+| coin (50/50) | n/a | **0.2500** |
+| raw win rate | 0.510 | 0.2936 (worst) |
+| shrink α=0.5 | 0.510 | 0.2667 |
+| shrink α=10 | 0.496 | 0.2518 |
+| shrink α=50 | 0.493 | 0.2504 |
+
+Every shrinkage value is *worse* than the coin on Brier; the strongest shrinkage
+(α=50) approaches but does not beat 0.2500 — the optimal shrinkage in the limit
+IS the coin. Accuracy hovers at 50.6% across all candidates: no team-level
+shootout skill is recoverable from 5-15 game samples spanning 60 years of squad
+turnover. Same conclusion the academic literature (Apesteguia & Palacios-Huerta
+2010; Kocher et al. 2012) reaches: penalty kicks are ~75-80% per-shot Bernoulli
+trials whose 5-shot aggregation is dominated by shooter / keeper individual
+variance, not stable team factors.
+
+**(b) Strength-weighted coin (the project's current code, n=231 post-2010
+shootouts).** The `_play()` function used `coin = rng.random < lam/(lam+mu)`,
+i.e. the team with the higher 90-min lambda was assumed to also be the favourite
+in the shootout.
+
+| predictor | accuracy | Brier |
+|-----------|----------|-------|
+| coin (50/50) | 0.506 | **0.2500** |
+| **strength-weighted (production)** | **0.489** | **0.2683** |
+
+The strength-weighted formulation is *worse than a coin* (accuracy −1.7pp,
+Brier +0.018, on n=231). 90-min attacking strength is anti-predictive of
+penalty-shootout outcome — the best penalty teams (Croatia, Argentina, Germany)
+are well-represented; the worst (Netherlands 2/10, Costa Rica 2/10) are also
+historically strong sides at 90 minutes. The project's existing implementation
+was therefore introducing systematic error in every Monte Carlo knockout tie.
+
+**Decisions.**
+1. **Reject Bayesian shrinkage / raw-rate / dexorynlabs's pitch.** No
+   team-level shootout-skill model beats a fair coin on Brier or accuracy.
+   Same fate as 9 prior factors (importance, dead-rubber, holder, weather,
+   climate, age, referee, variance-layer, OU 1.5).
+2. **FIX `montecarlo._play()`: replace `lam/(lam+mu)` with a 50/50 coin.**
+   This is a *correction*, not a new factor — the current code was
+   demonstrably anti-skill on n=231. Effect on title odds is small
+   (shootouts are rare and balanced) but every previously simulated
+   knockout-tie outcome was biased toward the higher-λ team for no
+   evidence-based reason. Tool: `scripts/explore_shootout_alpha.py`.
+
+Net: adopting the doctrine ("test before believing") prevented adding a noise
+factor AND surfaced a pre-existing bug. Two wins from one investigation.

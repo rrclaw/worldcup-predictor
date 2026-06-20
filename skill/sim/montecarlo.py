@@ -287,9 +287,18 @@ def run(model, fixtures: pd.DataFrame, n: int = 50000, seed: int = 0,
     tour_goals = gf.copy()
 
     def _play(home, away):
-        """One knockout round, vectorised: sample scorelines, resolve (penalties via a
-        strength-weighted coin), accumulate goals, return winner team-ids (n, k).
-        Pairings that were ACTUALLY played are pinned to the real score and winner."""
+        """One knockout round, vectorised: sample scorelines, resolve any tie
+        with a 50/50 shootout coin, accumulate goals, return winner team-ids (n, k).
+
+        Shootout resolution is FAIR (50/50), not strength-weighted (Run 29).
+        Walk-forward on 231 post-2010 actual shootouts: the prior strength-
+        weighted `lam/(lam+mu)` formulation scored Brier 0.2683 / accuracy 0.489
+        — *worse* than a coin (Brier 0.2500 / accuracy 0.506). Bayesian
+        shrinkage on the team's own shootout history (full sweep α=0.5..50)
+        was also worse than a coin on Brier; raw historical win rate was even
+        worse (Brier 0.2936). Pairings that were ACTUALLY played are still
+        pinned to the real score and winner.
+        """
         lam = np.exp(inter + atk[home] - dfc[away])
         mu = np.exp(inter + atk[away] - dfc[home])
         hg = rng.poisson(lam)
@@ -301,7 +310,8 @@ def run(model, fixtures: pd.DataFrame, n: int = 50000, seed: int = 0,
         ri = np.repeat(np.arange(n), home.shape[1])
         np.add.at(tour_goals, (ri, home.ravel()), hg.ravel())
         np.add.at(tour_goals, (ri, away.ravel()), ag.ravel())
-        coin = rng.random(hg.shape) < (lam / (lam + mu))
+        # FAIR shootout coin (Run 29) — see docstring above.
+        coin = rng.random(hg.shape) < 0.5
         hw = (hg > ag) | ((hg == ag) & coin)
         win = np.where(hw, home, away)
         if ko_pinned:
