@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 from skill.helpers import cli, paths
 
@@ -117,8 +118,8 @@ def test_unsettled_match_skipped(tmp_path, monkeypatch):
     assert out["cumulative"] is None
 
 
-def test_non_1x2_market_skipped_for_now(tmp_path, monkeypatch):
-    """AH/OU bets are deferred until P0.2b — settlement must not crash on them."""
+def test_ah_settlement_home_wins(tmp_path, monkeypatch):
+    """AH -0.5 home: FRA wins 2-0 → home covers → profit = stake × (odds-1)."""
     monkeypatch.setattr(paths, "REPORTS", tmp_path)
     _make_slate(tmp_path, "2026-06-19", [
         {"label": "FRA vs ENG · AH -0.5 home", "decimal_odds": 1.9, "stake": 200.0,
@@ -127,7 +128,62 @@ def test_non_1x2_market_skipped_for_now(tmp_path, monkeypatch):
     matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 0)])
     with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
         out = cli._betting_payload("2026-06-20")
-    # AH bets are intentionally not settled yet — n_settled stays 0
+    assert out["cumulative"]["n_settled"] == 1
+    assert abs(out["cumulative"]["total_pnl"] - 180.0) < 0.01  # 200 × (1.9−1)
+    assert out["cumulative"]["current_bankroll"] == pytest.approx(10180.0, abs=0.01)
+
+
+def test_ah_settlement_home_loses(tmp_path, monkeypatch):
+    """AH -0.5 home: FRA loses 0-1 → home does not cover → lose stake."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · AH -0.5 home", "decimal_odds": 1.9, "stake": 200.0,
+         "market": "ah_minus_0.5"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 0, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == -200.0
+    assert out["cumulative"]["current_bankroll"] == pytest.approx(9800.0, abs=0.01)
+
+
+def test_ah_settlement_draw_is_loss_for_minus_half(tmp_path, monkeypatch):
+    """AH -0.5 home: draw 1-1 → home does not cover (-0.5 line) → lose stake."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · AH -0.5 home", "decimal_odds": 1.9, "stake": 200.0,
+         "market": "ah_minus_0.5"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 1, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == -200.0
+
+
+def test_ah_settlement_plus_half_draw_wins(tmp_path, monkeypatch):
+    """AH +0.5 home: draw 1-1 → home covers (+0.5 line) → profit."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · AH +0.5 home", "decimal_odds": 1.9, "stake": 200.0,
+         "market": "ah_plus_0.5"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 1, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == pytest.approx(180.0, abs=0.01)
+
+
+def test_ou_unknown_market_skipped(tmp_path, monkeypatch):
+    """Unknown market labels must not crash settlement and must be silently skipped."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · OU 2.5 over", "decimal_odds": 1.9, "stake": 200.0,
+         "market": "ou_2.5"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    # OU label format is not handled yet — must be skipped, not crash
     assert out["cumulative"] is None
 
 

@@ -985,24 +985,52 @@ def _betting_payload(report_date: str) -> dict:
         day_stake = day_pnl = 0.0
         day_n_settled = 0
         for bet in slate.get("bets", []):
-            # label looks like "FRA vs ENG · 1X2 home" — parse for settlement.
             label = bet.get("label", "")
-            # Only the 1X2 markets are settled today (P0.2b will add AH/OU).
-            if " · 1X2 " not in label:
-                continue
-            try:
-                match, side = label.rsplit(" · 1X2 ", 1)
-                home, away = match.split(" vs ", 1)
-            except ValueError:
-                continue
-            outcome = outcomes.get((date_key, home, away))
-            if outcome is None:
-                continue
-            hs, as_ = outcome
-            actual = "home" if hs > as_ else ("draw" if hs == as_ else "away")
             stake = float(bet.get("stake", 0.0))
-            won = (side == actual)
-            payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
+            if " · 1X2 " in label:
+                try:
+                    match, side = label.rsplit(" · 1X2 ", 1)
+                    home, away = match.split(" vs ", 1)
+                except ValueError:
+                    continue
+                outcome = outcomes.get((date_key, home, away))
+                if outcome is None:
+                    continue
+                hs, as_ = outcome
+                actual = "home" if hs > as_ else ("draw" if hs == as_ else "away")
+                won = (side == actual)
+                payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
+            elif " · AH " in label:
+                # label: "HOME vs AWAY · AH ±X.Y side"
+                try:
+                    match, rest = label.rsplit(" · AH ", 1)
+                    parts = rest.rsplit(" ", 1)
+                    line_str, side = parts[0], parts[1]
+                    home, away = match.split(" vs ", 1)
+                    line = float(line_str)
+                except (ValueError, IndexError):
+                    continue
+                outcome = outcomes.get((date_key, home, away))
+                if outcome is None:
+                    continue
+                hs, as_ = outcome
+                margin = hs - as_  # positive → home winning margin
+                # AH half-line settlement (no push): line is handicap on home team
+                # home covers iff (home_goals - away_goals) > -line
+                # i.e. iff margin + line > 0
+                adjusted = margin + line
+                if side == "home":
+                    won = adjusted > 0
+                    push = adjusted == 0
+                else:  # away
+                    won = adjusted < 0
+                    push = adjusted == 0
+                if push:
+                    payout = 0.0
+                else:
+                    payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
+            else:
+                continue
             day_stake += stake
             day_pnl += payout
             day_n_settled += 1
@@ -1038,15 +1066,94 @@ def _betting_payload(report_date: str) -> dict:
     return out
 
 
+def _ah_opportunities(p: dict, match: str, kellymod) -> "list":
+    """AH opportunities for one fixture using the market-anchored 1X2 as the AH anchor.
+
+    The market_1x2 blend (60% Polymarket + 40% DC) already embeds bookmaker
+    consensus. For AH ±0.5 — the two walk-forward-validated half lines — the
+    mapping to market-implied AH probability is exact:
+      AH -0.5 home cover  ↔  home wins     → market implied = p_home_win
+      AH +0.5 home cover  ↔  home wins or draws → market implied = p_home_win + p_draw
+    Edge is derived.p_home (pure DC) minus this market-implied probability.
+    Without a live AH feed (P0.2b), this 1X2→AH proxy is the best available
+    free anchor; it is still valid as long as the market 1X2 is sharp.
+    """
+    if not p.get("market_1x2") or "derived" not in p:
+        return []
+    mkt = p["market_1x2"]  # [p_home_win, p_draw, p_away_win]
+    p_h_mkt, p_d_mkt, p_a_mkt = float(mkt[0]), float(mkt[1]), float(mkt[2])
+
+    # AH market-implied probabilities for the supported half lines
+    # (exact mapping from 1X2; only lines ±0.5/±1.5 are whitelisted by Run 27)
+    _AH_MARKET_IMPLIED = {
+        -0.5: (p_h_mkt,              p_a_mkt + p_d_mkt),  # home must WIN
+        +0.5: (p_h_mkt + p_d_mkt,   p_a_mkt),             # home must NOT LOSE
+        -1.5: (None, None),  # needs goal-margin dist; skip — unreliable from 3-bucket
+        +1.5: (None, None),  # same
+    }
+
+    ops = []
+    for ah_entry in p["derived"].get("asian_handicap", []):
+        line = float(ah_entry["line"])
+        if line not in _AH_MARKET_IMPLIED:
+            continue
+        p_mkt_home, p_mkt_away = _AH_MARKET_IMPLIED[line]
+        if p_mkt_home is None:
+            continue
+        for side, p_model, p_mkt_side, fair_key, mkt_key in (
+            ("home", ah_entry["p_home"], p_mkt_home,
+             "fair_home_odds", f"ah_{'minus' if line < 0 else 'plus'}_{abs(line):.1f}".replace(".0", "")),
+            ("away", ah_entry["p_away"], p_mkt_away,
+             "fair_away_odds", f"ah_{'minus' if line > 0 else 'plus'}_{abs(line):.1f}".replace(".0", "")),
+        ):
+            fair_odds = ah_entry.get(fair_key)
+            if not fair_odds or p_mkt_side <= 0:
+                continue
+            sign = "minus" if line < 0 else "plus"
+            line_str = f"{'-' if line < 0 else '+'}{abs(line):.1f}".rstrip("0").rstrip(".")
+            label = f"{match} · AH {line_str} {side}"
+            # market odds = 1 / market-implied prob (de-vigged, from 1X2 anchor)
+            market_decimal = 1.0 / p_mkt_side
+            market_key = f"ah_{sign}_{str(abs(line)).rstrip('0').rstrip('.')}"
+            ops.append(kellymod.Opportunity(
+                label=label, p_win=float(p_model),
+                decimal_odds=market_decimal, p_market=p_mkt_side,
+                market=market_key,
+            ))
+    return ops
+
+
+def _ou_opportunities(p: dict, match: str, kellymod) -> "list":
+    """OU opportunities using the model's own fair price as the base.
+
+    Without live OU odds (P0.2b deferred), we can only surface OU when the
+    model's DC fair price diverges from the 1X2-implied over probability.
+    For OU 2.5 (the primary validated line): the 1X2-implied over-2.5 ≈
+    p_home_win + p_away_win (goals only if someone wins by 2+) — a rough
+    proxy. This is lower confidence than AH, so OU ops are only included
+    when mode is 'both' or 'ou' explicitly. OU 1.5 is hard-blocked (Run 27).
+    """
+    if "derived" not in p:
+        return []
+    # Use the 1X2 market blend to approximate OU 2.5 market-implied prob.
+    # Over 2.5: any scoreline with total > 2. From 3-bucket:
+    # p_over_2.5 ≈ 1 - P(0-0) - P(1-0) - P(0-1) - P(1-1) - P(2-0) - P(0-2)
+    # This can't be derived cleanly from 1X2 alone — skip OU in proxy mode.
+    # OU is only useful once P0.2b provides real bookmaker OU lines.
+    return []
+
+
 def _cmd_bet(args):
     """Generate today's recommended bet slate from the latest predictions.
 
-    Reads `reports/<date>/predictions.json` (or today's by default), turns each
-    fixture's derived AH/OU lines into Opportunities at the *fair* odds, and
-    runs the portfolio Kelly engine. Without a real bookmaker feed (P0.2b is
-    deferred), edge is always zero against the fair price — so the slate is
-    empty by design until either a live odds source is wired or the user
-    overrides with `--use-model-edge` to bet against an external odds CSV.
+    --mode controls which markets are included in the slate:
+      ah   (default) — Asian Handicap ±0.5 only, using the market_1x2 blend
+                        as the AH market-implied anchor (exact for half lines)
+      1x2             — 1X2 head-to-head vs Polymarket implied prices
+      both            — AH + 1X2 combined
+
+    Edge for AH is derived vs the 1X2-anchored market-implied AH probability.
+    Until P0.2b (live AH feed) lands, this is the best available free proxy.
     """
     from ..bet import kelly as kellymod
 
@@ -1056,14 +1163,14 @@ def _cmd_bet(args):
         print(f"no predictions at {preds_f} — run `predict --all` first", file=sys.stderr)
         sys.exit(1)
     preds = json.loads(preds_f.read_text())
+    mode = getattr(args, "mode", "ah")
 
     ops: list[kellymod.Opportunity] = []
     for p in preds:
         if p.get("error") or "derived" not in p:
             continue
         match = f"{p['home']} vs {p['away']}"
-        # 1X2 bets vs the live per-match market (when present)
-        if p.get("market_1x2"):
+        if mode in ("1x2", "both") and p.get("market_1x2"):
             for i, side in enumerate(("home", "draw", "away")):
                 p_model = (p["p_home"], p["p_draw"], p["p_away"])[i]
                 p_market = p["market_1x2"][i]
@@ -1073,8 +1180,8 @@ def _cmd_bet(args):
                     label=f"{match} · 1X2 {side}",
                     p_win=p_model, decimal_odds=1.0 / p_market, p_market=p_market,
                 ))
-        # AH / OU: model probabilities only (P0.2b will add real odds)
-        # — until then skip these to avoid betting against ourselves at fair.
+        if mode in ("ah", "both"):
+            ops.extend(_ah_opportunities(p, match, kellymod))
     out = kellymod.portfolio_kelly(ops, bankroll=args.bankroll)
 
     bets_dir = paths.REPORTS / "bets"
@@ -1167,6 +1274,8 @@ def main(argv=None):
     pbet = sub.add_parser("bet", help="Recommended bet slate from latest predictions")
     pbet.add_argument("--date", default=None, help="Report date (default: today)")
     pbet.add_argument("--bankroll", type=float, default=10000.0)
+    pbet.add_argument("--mode", default="ah", choices=["ah", "1x2", "both"],
+                      help="Markets to recommend: ah (default), 1x2, or both")
     pbet.set_defaults(func=_cmd_bet)
 
     pb = sub.add_parser("backtest")

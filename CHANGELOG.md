@@ -14,6 +14,26 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 ## [Unreleased]
 
 ### Added
+- **`cli bet --mode` parameter** with three options: `ah` (default), `1x2`,
+  `both`. AH mode generates Asian Handicap ±0.5 recommendations by using
+  the market-anchored 1X2 blend (60% Polymarket + 40% DC) as the AH
+  market-implied anchor — exact for half lines (AH -0.5 ↔ home win;
+  AH +0.5 ↔ home win or draw). Edge is the DC-derived AH probability minus
+  this 1X2-anchored proxy. This is the best available free AH anchor until
+  P0.2b (live Pinnacle AH feed) is wired in.
+- **AH settlement** in `_betting_payload`. Labels of the form
+  `"TEAM vs TEAM · AH ±X.Y side"` are now fully settled against actual
+  results (half-line: no push; margin arithmetic). 4 new unit tests covering
+  AH home win, AH home loss, AH -0.5 draw-as-loss, AH +0.5 draw-as-win.
+
+### Changed
+- Default market mode for `cli bet` changed from 1X2 to **AH** (more
+  informative for practical betting; 1X2 still available via `--mode 1x2`).
+- `test_non_1x2_market_skipped_for_now` replaced by `test_ou_unknown_market_skipped`
+  — OU labels are still not settled (format not yet handled), but AH labels
+  now settle correctly.
+
+### Added
 - **Dashboard betting panel** (`site/index.html`, `cli publish`). Today's bet
   slate is surfaced with its Kelly stake, edge, and odds; cumulative P&L,
   ROI, and max drawdown are computed by reconciling each settled bet against
