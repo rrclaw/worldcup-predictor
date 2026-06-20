@@ -255,6 +255,10 @@
     <h2 id="h-acc" style="display:none"><span class="bar"></span><span id="t-acc"></span> <span class="note" id="t-acc-note"></span></h2>
     <table id="acc"></table>
 
+    <h2 id="h-bet" style="display:none"><span class="bar"></span><span id="t-bet"></span> <span class="note" id="t-bet-note"></span></h2>
+    <div id="bet-summary"></div>
+    <table id="bet"></table>
+
     <h2 id="h-move" style="display:none"><span class="bar"></span><span id="t-move"></span> <span class="note" id="t-move-note"></span></h2>
     <table id="move"></table>
 
@@ -306,6 +310,12 @@ const I18N = {
     accTitle:"Live prediction accuracy", accNote:"every finished match vs our pre-kickoff forecast",
     accHit:"Accuracy to date", accRps:"Avg RPS", accRec:"Record", accMatches:"matches",
     accStarts:"⏳ Live scoreboard activates when the World Cup kicks off (Jun 11) — each result will be checked against our forecast.",
+    betTitle:"Today's bet slate", betNote:"quarter-Kelly stakes vs the live market — model edge ≥ 3% only",
+    betEmpty:"No bets meet the discipline gates today (edge ≥ 3%, fraction ≥ 0.5%). Slate intentionally empty.",
+    betCol:{match:"Match", market:"Market", side:"Side", odds:"Odds", edge:"Edge", stake:"Stake"},
+    betPnLTitle:"Cumulative P&L", betPnLNote:"settled vs actual results · quarter Kelly",
+    betPnLCol:{n:"Bets settled", stake:"Total stake", pnl:"Total P&L", roi:"ROI", dd:"Max drawdown", roll:"Bankroll"},
+    betDeferred:"AH/OU bets are deferred until a live Pinnacle feed (P0.2b) lands — the model's own AH/OU fair price is shown on each match card but not bet against.",
     credTitle:"Model track record", credBadge:"Backtested",
     credAcc:"Top-pick accuracy", cred3way:"win / draw / loss (3-way)",
     credRps:"Calibration · RPS", credBand:"bookmaker-grade",
@@ -342,6 +352,12 @@ const I18N = {
     accTitle:"实时预测战绩", accNote:"每场完赛结果 vs 我们赛前的预测",
     accHit:"截至目前准确率", accRps:"平均 RPS", accRec:"战绩", accMatches:"场",
     accStarts:"⏳ 6 月 11 日世界杯开赛后,实时战绩看板自动启动 —— 每场结果都会与我们的预测对照。",
+    betTitle:"今日下注清单", betNote:"四分之一凯利仓位 · 仅当模型 edge ≥ 3% 才下",
+    betEmpty:"今日没有满足下注纪律的标的(edge ≥ 3%, 凯利分数 ≥ 0.5%),清单为空 —— 模型保持沉默是常态。",
+    betCol:{match:"比赛", market:"市场", side:"方向", odds:"赔率", edge:"差值", stake:"仓位"},
+    betPnLTitle:"累计盈亏", betPnLNote:"按实际比赛结果结算 · 四分之一凯利",
+    betPnLCol:{n:"已结算", stake:"总仓位", pnl:"累计盈亏", roi:"ROI", dd:"最大回撤", roll:"账户余额"},
+    betDeferred:"让球盘 / 大小球需等 Pinnacle 实盘接入(P0.2b)后再开仓 —— 当前每场卡片上展示的是模型自算的公允价,不与之自我套利。",
     credTitle:"模型可信度", credBadge:"回测",
     credAcc:"单选命中率", cred3way:"胜 / 平 / 负 三选一",
     credRps:"概率校准 · RPS", credBand:"与博彩同档",
@@ -539,6 +555,57 @@ function moveTable(el, mv){
         <td class="pct ${cls}">${s}${(m.delta*100).toFixed(1)}%</td>
         <td>${sparkline(series[m.team])}</td></tr>`;}).join("");
 }
+function betPanel(summaryEl, tableEl, bt){
+  const t=L();
+  const today=(bt&&bt.today)||null;
+  const cum=(bt&&bt.cumulative)||null;
+  const hasAnything = today || cum;
+  document.getElementById("h-bet").style.display = hasAnything?"flex":"none";
+  if(!hasAnything){ summaryEl.innerHTML=""; tableEl.innerHTML=""; return; }
+  // Cumulative P&L summary card
+  let summary="";
+  if(cum){
+    const pnlCls = cum.total_pnl>0?"ok":(cum.total_pnl<0?"no":"");
+    const roiCls = cum.roi>0?"ok":(cum.roi<0?"no":"");
+    const tile = (lbl, val, cls="") => `<div class="hlcard"><div class="lbl">${lbl}</div><div class="val ${cls}">${val}</div></div>`;
+    summary = `<div class="hl" style="margin:8px 0 14px;">
+      ${tile(t.betPnLCol.n, cum.n_settled)}
+      ${tile(t.betPnLCol.stake, cum.total_stake.toFixed(0))}
+      ${tile(t.betPnLCol.pnl, (cum.total_pnl>=0?"+":"")+cum.total_pnl.toFixed(0), pnlCls)}
+      ${tile(t.betPnLCol.roi, (cum.roi*100).toFixed(1)+"%", roiCls)}
+      ${tile(t.betPnLCol.dd, (cum.max_drawdown*100).toFixed(1)+"%")}
+      ${tile(t.betPnLCol.roll, cum.current_bankroll.toFixed(0))}
+    </div>`;
+  }
+  summary += `<div class="treenote">${t.betDeferred}</div>`;
+  summaryEl.innerHTML = summary;
+  // Today's slate
+  const bets=(today&&today.bets)||[];
+  if(!bets.length){
+    tableEl.innerHTML=`<tr><td class="err" style="padding:14px">${t.betEmpty}</td></tr>`;
+    return;
+  }
+  tableEl.innerHTML="<tr><th>"+t.betCol.match+"</th><th>"+t.betCol.market+"</th><th>"+t.betCol.side+"</th>"+
+    "<th>"+t.betCol.odds+"</th><th>"+t.betCol.edge+"</th><th>"+t.betCol.stake+"</th></tr>"+
+    bets.map(b=>{
+      // label format: "HOME vs AWAY · 1X2 home" (or AH/OU + side)
+      const parts=(b.label||"").split(" · ");
+      const matchPart=parts[0]||"";
+      const sidePart=parts.slice(1).join(" · ")||"";
+      const sideTokens=sidePart.split(" ");
+      const market=sideTokens[0]||"";
+      const side=sideTokens.slice(1).join(" ")||"";
+      const edgeCls=(b.edge||0)>0.05?"ok":"";
+      return `<tr>
+        <td>${matchPart}</td>
+        <td><span style="color:var(--mut)">${market}</span></td>
+        <td>${side}</td>
+        <td class="pct">${(b.decimal_odds||0).toFixed(2)}</td>
+        <td class="pct ${edgeCls}">${((b.edge||0)*100).toFixed(1)}%</td>
+        <td class="pct"><b>${(b.stake||0).toFixed(0)}</b></td>
+      </tr>`;
+    }).join("");
+}
 function ctxNote(c){ if(LANG!=="zh")return c;
   return c.replace(/altitude (\d+)m/,"高原 $1米").replace(/(.+) short rest/,(_,t)=>tName(t)+" 短休息"); }
 function bootTable(el, gb){
@@ -672,6 +739,8 @@ function render(){
   document.getElementById("t-groups-note").textContent="· "+t.groupsNote;
   document.getElementById("t-acc").textContent=t.accTitle;
   document.getElementById("t-acc-note").textContent="· "+t.accNote;
+  document.getElementById("t-bet").textContent=t.betTitle;
+  document.getElementById("t-bet-note").textContent="· "+t.betNote;
   document.getElementById("t-move").textContent=t.move;
   document.getElementById("t-move-note").textContent="· "+t.moveNote;
   document.getElementById("t-boot").textContent=t.boot;
@@ -694,6 +763,7 @@ function render(){
   renderGroups(sim.group_standings);
   accBanner(document.getElementById("accbanner"), DATA.live_accuracy);
   accTable(document.getElementById("acc"), DATA.live_accuracy);
+  betPanel(document.getElementById("bet-summary"), document.getElementById("bet"), DATA.betting);
   cmpTable(document.getElementById("cmp"), DATA.title_comparison);
   moveTable(document.getElementById("move"), DATA.movement);
   bootTable(document.getElementById("boot"), sim.golden_boot);

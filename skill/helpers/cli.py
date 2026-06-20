@@ -902,10 +902,140 @@ def _cmd_publish(args):
                   for t in [m["team"] for m in movers[:20]]}
         data["movement"] = {"since": dates[max(0, len(dates) - 8)], "as_of": dates[-1],
                             "top_movers": movers[:20], "market_series": series}
+    # ---- betting payload (P2.1): today's recommended slate + cumulative P&L ----
+    data["betting"] = _betting_payload(rep.name)
+
     (paths.SITE / "data.json").write_text(json.dumps(data, ensure_ascii=False))
     print(f"published -> {paths.SITE / 'data.json'} "
           f"({len(data['predictions'])} fixtures, sim={'yes' if sim_f.exists() else 'no'}, "
-          f"market={'yes' if data.get('market_title') else 'no'})")
+          f"market={'yes' if data.get('market_title') else 'no'}, "
+          f"bets={len(data['betting']['today']['bets']) if data['betting'].get('today') else 0})")
+
+
+def _betting_payload(report_date: str) -> dict:
+    """Bet slate + cumulative P&L for the dashboard.
+
+    Reads `reports/bets/<date>.json` (written by `cli bet`) for the report
+    date AND every prior date, then settles each historical bet against the
+    actual match result (already loaded into `cli review`). Returns:
+
+      {
+        "today": {date, bankroll, bets[], discipline},   # from reports/bets/<report_date>.json
+        "history": [
+          {date, n_bets, stake, pnl, bankroll_after, ...},
+        ],
+        "cumulative": {
+          "n_settled": int, "total_stake": float, "total_pnl": float,
+          "roi": float, "max_drawdown": float, "starting_bankroll": float,
+        },
+      }
+
+    History is empty until at least one prior `cli bet` slate exists AND the
+    matches it covered are settled. Until then the dashboard renders only the
+    "today" panel and a placeholder note.
+    """
+    import glob
+
+    bets_root = paths.REPORTS / "bets"
+    out: dict = {"today": None, "history": [], "cumulative": None}
+    if not bets_root.exists():
+        return out
+
+    today_f = bets_root / f"{report_date}.json"
+    if today_f.exists():
+        try:
+            out["today"] = json.loads(today_f.read_text())
+        except json.JSONDecodeError:
+            pass
+
+    # Settle every prior dated slate against actual outcomes.
+    prior_files = sorted(glob.glob(str(bets_root / "*.json")))
+    if not prior_files:
+        return out
+
+    # Build the same prediction → outcome index used by _accuracy_payload, so
+    # bet settlement reuses the no-hindsight selector and stays consistent.
+    res = data_loader.fetch_historical()
+    played = res[(res["tournament"] == paths.WC2026_TOURNAMENT)
+                 & (res["date"] >= pd.Timestamp(paths.WC2026_START))
+                 & res["home_score"].notna()].copy()
+    outcomes: dict = {}
+    for r in played.itertuples():
+        outcomes[(str(r.date.date()), r.home_team, r.away_team)] = (
+            int(r.home_score), int(r.away_score)
+        )
+
+    starting_bankroll = None
+    bankroll = None
+    cum_stake = cum_pnl = 0.0
+    n_settled = 0
+    equity_curve: list[float] = []
+    peak = 0.0
+    max_dd = 0.0
+
+    for fp in prior_files:
+        try:
+            slate = json.loads(open(fp).read())
+        except (OSError, json.JSONDecodeError):
+            continue
+        date_key = slate.get("date") or fp.split("/")[-1].rsplit(".", 1)[0]
+        if starting_bankroll is None:
+            starting_bankroll = float(slate.get("bankroll", 10000.0))
+            bankroll = starting_bankroll
+        day_stake = day_pnl = 0.0
+        day_n_settled = 0
+        for bet in slate.get("bets", []):
+            # label looks like "FRA vs ENG · 1X2 home" — parse for settlement.
+            label = bet.get("label", "")
+            # Only the 1X2 markets are settled today (P0.2b will add AH/OU).
+            if " · 1X2 " not in label:
+                continue
+            try:
+                match, side = label.rsplit(" · 1X2 ", 1)
+                home, away = match.split(" vs ", 1)
+            except ValueError:
+                continue
+            outcome = outcomes.get((date_key, home, away))
+            if outcome is None:
+                continue
+            hs, as_ = outcome
+            actual = "home" if hs > as_ else ("draw" if hs == as_ else "away")
+            stake = float(bet.get("stake", 0.0))
+            won = (side == actual)
+            payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
+            day_stake += stake
+            day_pnl += payout
+            day_n_settled += 1
+        if day_n_settled == 0:
+            continue
+        bankroll += day_pnl
+        cum_stake += day_stake
+        cum_pnl += day_pnl
+        n_settled += day_n_settled
+        equity_curve.append(bankroll)
+        peak = max(peak, bankroll)
+        dd = (peak - bankroll) / peak if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+        out["history"].append({
+            "date": date_key,
+            "n_bets": day_n_settled,
+            "stake": round(day_stake, 2),
+            "pnl": round(day_pnl, 2),
+            "bankroll_after": round(bankroll, 2),
+        })
+
+    if n_settled > 0:
+        out["cumulative"] = {
+            "n_settled": n_settled,
+            "total_stake": round(cum_stake, 2),
+            "total_pnl": round(cum_pnl, 2),
+            "roi": round(cum_pnl / cum_stake, 4) if cum_stake > 0 else 0.0,
+            "max_drawdown": round(max_dd, 4),
+            "starting_bankroll": round(starting_bankroll, 2),
+            "current_bankroll": round(bankroll, 2),
+        }
+    return out
 
 
 def _cmd_bet(args):
