@@ -132,6 +132,25 @@ logged → reports/bets/2026-06-20.json
 
 ## 4. 底层模型原理
 
+### 4.0 设计哲学：市场锚定的集成模型
+
+**博彩公司的共识赔率长期来看很难被打败**——它聚合了全球聪明钱、内幕信息、
+临场调整等所有公开和半公开信息。但**盲目复制赔率没有 edge**：照抄市场只能
+拿到博彩公司收佣后的负期望。
+
+本项目的设计是**市场锚定的集成（market-anchored ensemble）**：
+
+1. **以去佣后的市场共识作为强先验**：Polymarket、Kalshi 多源平均归一
+2. **叠加独立信号层**：Dixon-Coles 双变量泊松、ELO 强度先验、
+   情境调整（海拔、休息日、伤病、跨洲强度差）
+3. **混合输出**：`P_final = 0.60·P_market + 0.40·P_model_adj`
+4. **关注分歧而非一致**：模型与市场**意见相同时**没有 edge，**意见相左时**
+   才是值得下注的信号
+
+这个哲学决定了所有下游设计：每个新因子必须在 walk-forward 上**独立打败基线**
+才能进入模型；所有市场（1X2 / AH / OU 各线）必须通过 walk-forward 校准才能
+进入下注白名单（见 §9）。
+
 ### 4.1 第一层：Dixon-Coles 期望进球
 
 模型从 49,000+ 场历史国际比赛中拟合每支球队的**进攻力 α** 和**防守力 β**，
@@ -271,16 +290,38 @@ PYTHONPATH=. python -m skill.helpers.cli <subcommand> [args]
 
 ## 8. 数据来源
 
-| 数据 | 来源 | 是否免费 |
-|---|---|---|
-| 历史比赛结果 + WC2026 赛程 | martj42/international_results（GitHub CSV） | ✅ 免费 |
-| 赛程 / 实时比分 | football-data.org 免费层 | ✅ 免费 |
-| 首发阵容 | API-Football 免费层 | ✅ 免费（需 key） |
-| 预测市场价格（1X2） | Polymarket Gamma API + Kalshi | ✅ 免费 |
-| 天气（仅展示） | Open-Meteo | ✅ 免费 |
-| 球员评分先验 | EA FC25 OVR | ✅ 免费 |
-| ClubElo 俱乐部评分 | clubelo.com | ✅ 免费 |
-| 已验证盘口（Pinnacle） | The Odds API（Business 层） | ❌ ~$30/月 |
+### 8.1 已使用（全部免费）
+
+| 数据 | 来源 | 用途 | API key |
+|---|---|---|---|
+| 历史比赛结果 + WC2026 赛程 | [martj42/international_results](https://github.com/martj42/international_results)（公共 CSV） | DC MLE 训练（49k+ 场，含友谊赛 / 资格赛 / 正赛） | 无需 |
+| 进球记录 | martj42/goalscorers.csv | Golden Boot + 球员形态 | 无需 |
+| 点球大战历史 | martj42/shootouts.csv | 点球硬币校准（Run 29） | 无需 |
+| 赛程 / 实时比分 | football-data.org 免费层 | 比分回填 + 元信息 | `FOOTBALLDATA_KEY` |
+| 比赛日首发 XI | API-Football 免费层 | 阵容确认、缺阵球员调整 | `APIFOOTBALL_KEY` |
+| 预测市场（1X2） | Polymarket Gamma API + Kalshi | 市场锚定（per-match 1X2） | 无需 |
+| 球场 / 海拔 / 坐标 | `data/venues_wc2026.json`（自建静态表） | 海拔上下文调整 | 无需 |
+| 天气（仅展示） | Open-Meteo | 看板展示（已被 Run 19/20 证伪不作为预测因子） | 无需 |
+| 俱乐部 ELO | clubelo.com | 球员俱乐部强度 → 国家队 talent prior | 无需 |
+| EA FC25 球员评分 | 公开数据集（OVR + 攻防分项） | 攻防分离 talent prior | 无需 |
+| 联合会归属 | `data/confederations.json` | 跨洲强度修正（Run 28） | 无需 |
+| 伤病 / 缺阵 | `data/injuries_wc2026.json`（手工维护） | 阵容剔除后重算强度 | 无需 |
+
+### 8.2 可选付费升级
+
+| 数据 | 来源 | 用途 | 费用 | API key |
+|---|---|---|---|---|
+| Pinnacle 实时 1X2 / AH / OU | The Odds API 基础付费档（`bookmakers=pinnacle`） | 让球盘 / 大小盘的实盘市场锚定 + 真实 ROI | ~$30/月 | `ODDS_API_KEY` |
+| Pinnacle 历史 AH/OU 存档 | The Odds API Business 档 | 让球盘 / 大小盘的历史真实 ROI 回测 | ~$99/月 | 同上 |
+
+详见 §11 付费升级决策。
+
+### 8.3 已评估并拒绝的源
+
+- **Macau / 澳彩 / 亚洲零售盘**：散户资金驱动，与 Pinnacle 高度相关但带噪更多；
+  无免费 API；ToS 灰色地带，无法 walk-forward 验证
+- **Transfermarkt 转会身价**：bot-protected，免费层不可大规模抓取
+- **付费 xG（Opta / StatsBomb 国家队级）**：以俱乐部足球为主，国家队覆盖率不足
 
 ---
 
@@ -289,7 +330,7 @@ PYTHONPATH=. python -m skill.helpers.cli <subcommand> [args]
 所有预测因子必须满足：
 1. **Walk-forward 验证**：用严格截止日期 T 之前的数据预测 T 之后，绝无回望
 2. **必须超越基线**：打败 ELO 基线或 DC 基线，才能进入模型
-3. **失败因子记录在案**：见 `reports/backtests/FINDINGS.md`（共 29 次实验）
+3. **失败因子记录在案**：见 `reports/backtests/FINDINGS.md`
 
 已拒绝因子（实验后放弃）：天气、气候差、重要性、死橡皮、卫冕冠军、年龄乘数、
 裁判因素、贝叶斯点球技能、OU 1.5 市场、强度加权点球。
@@ -315,3 +356,29 @@ A: Walk-forward 在 231 场实际点球上验证，任何基于球队强度的�
 **Q: 如何查看历史下注的盈亏？**  
 A: 运行 `review` 后，看板的"Betting"面板会显示累计 P&L、ROI 和最大回撤。
 或直接读 `reports/bets/` 目录下各日期的 JSON 文件。
+
+---
+
+## 11. 付费升级决策
+
+项目所有核心功能（DC 模型、市场锚定、AH/OU 推荐、Kelly 下注）**全部在免费层
+可用**。如果你想强化"市场锚定"层，有且仅有一个值得付费的升级，以及一个**明确不推荐**的常见付费源。
+
+| 升级 | 决策 | 原因 |
+|---|---|---|
+| **Pinnacle 收盘价**（[The Odds API](https://the-odds-api.com) 基础付费档，~$30/月） | ✅ **推荐** | Pinnacle 收盘价是学界公认的"sharpest line"——低佣金、跟随聪明钱而非散户情绪。它是市场锚定层最值得花钱加的单一信号。配置只需在 `.env` 中设置 `ODDS_API_KEY`，加载器自动识别；无需改模型。 |
+| **Pinnacle 历史 AH/OU 存档**（同一 key 升级到 Business 档，~$99/月） | ⚠ **二期** | 用于让球盘 / 大小盘的真实 ROI 历史回测。在赛事开始前不必要；待 P0.2b 启动后再升级。 |
+| **Macau 澳彩盘 / 亚洲零售盘** | ❌ **不推荐** | 散户驱动的让球盘，反映的是中国公众资金而非聪明钱，与 Pinnacle 高度相关却更带噪——加了等于在共识里多塞一份相关信号，是噪音不是 alpha。无免费 API、无干净历史档，无法在本项目"必须 walk-forward 验证才能采纳"的纪律下接入。同样理由排除其他亚洲零售盘。 |
+
+**核心原则**：花钱买**锐度（sharpness）和正交性（orthogonality）**——
+Pinnacle 收盘价正是这种来源；不要花钱重复购买已经包含在共识里的散户信号。
+
+---
+
+## 附录：相关文档
+
+- [`README.md`](../README.md) — 项目门面与高层介绍
+- [`CHANGELOG.md`](../CHANGELOG.md) — 版本变化记录（Keep a Changelog 1.1.0）
+- [`reports/backtests/FINDINGS.md`](../reports/backtests/FINDINGS.md) — 完整因子验证记录
+- [`docs/competitor_analysis.md`](competitor_analysis.md) — 9 个 GitHub 同类项目横向对比
+- [`.claude/plans/optimization_backlog.md`](../.claude/plans/optimization_backlog.md) — 当前优化路线图（开发者维度）
