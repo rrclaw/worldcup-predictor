@@ -14,24 +14,39 @@ removed, or has its weight changed (cross-references `reports/backtests/FINDINGS
 ## [Unreleased]
 
 ### Added
-- **`cli bet --mode` parameter** with three options: `ah` (default), `1x2`,
-  `both`. AH mode generates Asian Handicap ±0.5 recommendations by using
-  the market-anchored 1X2 blend (60% Polymarket + 40% DC) as the AH
-  market-implied anchor — exact for half lines (AH -0.5 ↔ home win;
-  AH +0.5 ↔ home win or draw). Edge is the DC-derived AH probability minus
-  this 1X2-anchored proxy. This is the best available free AH anchor until
-  P0.2b (live Pinnacle AH feed) is wired in.
-- **AH settlement** in `_betting_payload`. Labels of the form
-  `"TEAM vs TEAM · AH ±X.Y side"` are now fully settled against actual
-  results (half-line: no push; margin arithmetic). 4 new unit tests covering
-  AH home win, AH home loss, AH -0.5 draw-as-loss, AH +0.5 draw-as-win.
+- **1X2 → λ_market inversion** (`derived_markets.infer_market_lambdas`).
+  Industry-standard path used by Pinnacle / academic references for
+  converting European 1X2 odds to Asian Handicap and Over/Under fair prices:
+  hold DC's ρ fixed and solve via L-BFGS-B for (λ_h^M, λ_a^M) that reproduces
+  the de-vigged 1X2 exactly through the DC score grid. Pricing AH/OU off
+  those market λ stays internally consistent across all lines — no longer
+  limited to the ±0.5 half lines reachable by direct 3-bucket mapping.
+- **`cli bet --mode ahou`** (new default). Generates 3 dynamically-selected
+  AH lines (centred on `round-to-half(-(λ_h - λ_a))`) AND 3 OU lines
+  (centred on `round-to-half(λ_h + λ_a)`) per match — matching the layout
+  of mainstream Asian books (输赢盘/让球盘/大小盘 三栏式). New mode choices:
+  `ah`, `ou`, `ahou` (default), `1x2`, `all`.
+- **OU recommendations** are now first-class. `_ou_opportunities()` mirrors
+  `_ah_opportunities()` via the same λ-inference path. OU 1.5 remains
+  hard-blocked (Run 27 reverse-skill finding).
+- **AH integer + OU integer/half settlement** in `_betting_payload`.
+  Push-bearing lines (AH 0 / ±1 / ±2 and OU 2 / 3 / 4) refund stake on
+  exact-margin results. 7 new tests (AH 0 push, AH -1 push at margin=1,
+  OU 2.5 over/under, OU 3 push, unknown-market skip) added.
+- **9 new tests in `tests/test_market_lambda_inference.py`** verifying
+  inversion recovers DC λ when the 1X2 came from DC, handles ρ ≠ 0,
+  rejects degenerate inputs, and works on low-scoring matches.
 
 ### Changed
-- Default market mode for `cli bet` changed from 1X2 to **AH** (more
-  informative for practical betting; 1X2 still available via `--mode 1x2`).
-- `test_non_1x2_market_skipped_for_now` replaced by `test_ou_unknown_market_skipped`
-  — OU labels are still not settled (format not yet handled), but AH labels
-  now settle correctly.
+- **Default `cli bet` mode is now `ahou`** (was `ah` with only ±0.5).
+  AH still single-mode via `--mode ah`; OU alone via `--mode ou`.
+- **Whitelist expanded** (`MARKET_WHITELIST` in `kelly.py`): AH ±2.5,
+  AH integers 0/±1/±2, OU 2/3/4/4.5 added. Lines beyond the Run 27
+  walk-forward sample are flagged `# backtest pending (P3.4)` — accepted
+  on the strength of the λ-inference consistency, but a per-line
+  walk-forward must be run before the next major release.
+- `_predict_one` now writes `rho` to each prediction record (previously
+  only `lambda_home` / `lambda_away` were exposed).
 
 ### Added
 - **Dashboard betting panel** (`site/index.html`, `cli publish`). Today's bet

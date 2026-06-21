@@ -173,8 +173,48 @@ def test_ah_settlement_plus_half_draw_wins(tmp_path, monkeypatch):
     assert out["cumulative"]["total_pnl"] == pytest.approx(180.0, abs=0.01)
 
 
-def test_ou_unknown_market_skipped(tmp_path, monkeypatch):
-    """Unknown market labels must not crash settlement and must be silently skipped."""
+def test_ah_integer_push_refunds_stake(tmp_path, monkeypatch):
+    """AH 0 home, draw 1-1: margin=0 → adjusted=0 → push, stake refunded."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · AH 0 home", "decimal_odds": 2.0, "stake": 200.0,
+         "market": "ah_0"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 1, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["n_settled"] == 1
+    assert out["cumulative"]["total_pnl"] == 0.0  # push, no profit/loss
+
+
+def test_ah_minus_1_integer_home_wins_by_2(tmp_path, monkeypatch):
+    """AH -1 home, win 2-0: margin=2, adjusted=1>0 → home covers."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · AH -1 home", "decimal_odds": 2.0, "stake": 200.0,
+         "market": "ah_minus_1"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 0)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == 200.0
+
+
+def test_ah_minus_1_integer_home_wins_by_1_pushes(tmp_path, monkeypatch):
+    """AH -1 home, win 1-0: margin=1, adjusted=0 → push."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · AH -1 home", "decimal_odds": 2.0, "stake": 200.0,
+         "market": "ah_minus_1"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 1, 0)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == 0.0
+
+
+def test_ou_2_5_over_wins(tmp_path, monkeypatch):
+    """OU 2.5 over, total goals 3 → over wins."""
     monkeypatch.setattr(paths, "REPORTS", tmp_path)
     _make_slate(tmp_path, "2026-06-19", [
         {"label": "FRA vs ENG · OU 2.5 over", "decimal_odds": 1.9, "stake": 200.0,
@@ -183,7 +223,44 @@ def test_ou_unknown_market_skipped(tmp_path, monkeypatch):
     matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 1)])
     with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
         out = cli._betting_payload("2026-06-20")
-    # OU label format is not handled yet — must be skipped, not crash
+    assert out["cumulative"]["total_pnl"] == pytest.approx(180.0, abs=0.01)
+
+
+def test_ou_2_5_under_loses_when_total_3(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · OU 2.5 under", "decimal_odds": 1.9, "stake": 200.0,
+         "market": "ou_2.5"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == -200.0
+
+
+def test_ou_3_integer_total_3_pushes(tmp_path, monkeypatch):
+    """OU 3 over, total 3 → push, stake refunded."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · OU 3 over", "decimal_odds": 2.0, "stake": 200.0,
+         "market": "ou_3"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
+    assert out["cumulative"]["total_pnl"] == 0.0
+
+
+def test_unknown_market_label_skipped(tmp_path, monkeypatch):
+    """Unknown market label (e.g. BTTS) must skip, not crash."""
+    monkeypatch.setattr(paths, "REPORTS", tmp_path)
+    _make_slate(tmp_path, "2026-06-19", [
+        {"label": "FRA vs ENG · BTTS yes", "decimal_odds": 1.9, "stake": 200.0,
+         "market": "btts"},
+    ])
+    matches = _stub_fetch_historical([("2026-06-19", "FRA", "ENG", 2, 1)])
+    with patch.object(cli.data_loader, "fetch_historical", return_value=matches):
+        out = cli._betting_payload("2026-06-20")
     assert out["cumulative"] is None
 
 
