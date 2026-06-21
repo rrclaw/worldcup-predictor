@@ -310,21 +310,27 @@ CLUB_ELO_JSON = paths.DATA / "club_elo.json"
 
 
 def fetch_club_elo(force: bool = False) -> dict[str, float]:
-    """clubelo.com club Elo ratings (free, no key) → {club_name: elo}. Cached."""
+    """clubelo.com club Elo ratings (free, no key) → {club_name: elo}. Cached 7 days."""
     import csv
     import io
     import json as _json
+    import time
     from datetime import date as _date
 
+    _CACHE_TTL = 7 * 24 * 3600  # re-fetch at most once per week
     if CLUB_ELO_JSON.exists() and not force:
-        return _json.loads(CLUB_ELO_JSON.read_text())
+        age = time.time() - CLUB_ELO_JSON.stat().st_mtime
+        if age < _CACHE_TTL:
+            return _json.loads(CLUB_ELO_JSON.read_text())
     try:
         r = requests.get(CLUBELO_URL.format(date=_date.today().isoformat()), headers=UA, timeout=30)
         r.raise_for_status()
-    except Exception:
-        # Network or server error — return stale cache if available, else empty
+    except Exception as e:
+        # Network or server error — return stale cache (any age) if available, else empty
         if CLUB_ELO_JSON.exists():
+            print(f"[clubelo] server unavailable ({e}), using cached data", file=__import__("sys").stderr)
             return _json.loads(CLUB_ELO_JSON.read_text())
+        print(f"[clubelo] server unavailable ({e}), no cache — talent layer skipped", file=__import__("sys").stderr)
         return {}
     elo = {}
     for row in csv.DictReader(io.StringIO(r.text)):
@@ -660,6 +666,11 @@ def fetch_all() -> dict[str, Any]:
     """One-shot refresh used by `cli fetch --all`."""
     res = load_results()
     fx = load_wc2026_fixtures()
+    # refresh ClubElo cache if stale (best-effort; 503/network errors are logged but non-fatal)
+    try:
+        fetch_club_elo(force=False)
+    except Exception:
+        pass
     summary = {
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
         "historical_rows": int(len(res)),
