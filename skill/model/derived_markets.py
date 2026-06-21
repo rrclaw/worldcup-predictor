@@ -219,3 +219,73 @@ def derive_all(lam_h: float, lam_a: float, rho: float,
         "over_under": [over_under(lam_h, lam_a, rho, ln, max_goals)
                        for ln in ou_lines],
     }
+
+
+# -- 1X2 → λ_market inference (industry-standard AH/OU pricing path) ----------
+
+def _dc_1x2(lam_h: float, lam_a: float, rho: float, max_goals: int = 10) -> tuple[float, float, float]:
+    """Forward DC: λ → (p_home, p_draw, p_away)."""
+    grid = scoreline_matrix(lam_h, lam_a, rho, max_goals)
+    n = grid.shape[0]
+    i, j = np.indices((n, n))
+    p_home = float(grid[i > j].sum())
+    p_draw = float(grid[i == j].sum())
+    p_away = float(grid[i < j].sum())
+    return p_home, p_draw, p_away
+
+
+def infer_market_lambdas(p_market_1x2, lam_h_dc: float, lam_a_dc: float,
+                         rho: float, max_goals: int = 10,
+                         tol: float = 1e-4) -> tuple[float, float] | None:
+    """Reverse-engineer market-implied (λ_h, λ_a) from de-vigged 1X2 probs.
+
+    Industry-standard path for converting European 1X2 odds to Asian Handicap
+    / Over-Under fair prices (used by Pinnacle and academic references):
+
+      1. The DC score grid `P(X=i, Y=j | λ_h, λ_a, ρ)` already produces 1X2.
+      2. Hold ρ fixed (it's a league-level low-score correction, not a per-
+         match parameter) and solve for (λ_h^M, λ_a^M) that reproduces the
+         market's 1X2 exactly.
+      3. Use those market-implied λ to price ANY AH/OU line consistently —
+         not just the ±0.5 lines reachable by direct 1X2-to-AH mapping.
+
+    Returns None if the optimisation residual exceeds `tol` (degenerate input)
+    or the solution hits the λ bounds (extreme markets we don't trust).
+
+    Initial guess = DC's own (λ_h, λ_a) — usually 2-5 iterations to converge.
+    """
+    from scipy.optimize import minimize  # local import keeps module-load cheap
+
+    p = np.asarray(p_market_1x2, dtype=float)
+    if p.shape != (3,) or not np.isfinite(p).all():
+        return None
+    if abs(p.sum() - 1.0) > 0.01 or (p < 0).any():
+        return None
+
+    target = p / p.sum()  # renormalise away tiny rounding
+
+    def residual(x):
+        lh, la = x
+        ph, pd, pa = _dc_1x2(lh, la, rho, max_goals)
+        return (ph - target[0]) ** 2 + (pd - target[1]) ** 2 + (pa - target[2]) ** 2
+
+    bounds = [(0.05, 6.0), (0.05, 6.0)]
+    x0 = [max(0.05, min(6.0, lam_h_dc)), max(0.05, min(6.0, lam_a_dc))]
+    try:
+        res = minimize(residual, x0, method="L-BFGS-B", bounds=bounds,
+                       options={"ftol": 1e-10, "gtol": 1e-8, "maxiter": 50})
+    except Exception:  # noqa: BLE001 — scipy can raise on pathological inputs
+        return None
+
+    if not res.success or res.fun > tol ** 2:
+        return None
+    lh_m, la_m = float(res.x[0]), float(res.x[1])
+    # bounds-hit → market is too extreme to trust the inversion
+    if lh_m <= 0.06 or lh_m >= 5.99 or la_m <= 0.06 or la_m >= 5.99:
+        return None
+    return lh_m, la_m
+
+
+def round_to_half(x: float) -> float:
+    """Round to nearest 0.5 — the standard half-line basis for AH/OU main lines."""
+    return round(x * 2) / 2.0

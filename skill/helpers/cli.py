@@ -308,6 +308,7 @@ def _predict_one(model, row, squads=None, ctx=None, match_markets=None, absences
     # then `derived` is the model's own fair price, surfaced as model-vs-model edge.
     lam_h_post, lam_a_post = (mp["lambda_home"], mp["lambda_away"])  # already context-multiplied
     mp["derived"] = derived.derive_all(lam_h_post, lam_a_post, model.rho)
+    mp["rho"] = round(float(model.rho), 4)  # needed by _ah/_ou_opportunities for λ-inference
 
     if squads:
         lam_h, lam_a = model.lambdas(home, away, neutral)
@@ -1001,7 +1002,7 @@ def _betting_payload(report_date: str) -> dict:
                 won = (side == actual)
                 payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
             elif " · AH " in label:
-                # label: "HOME vs AWAY · AH ±X.Y side"
+                # label: "HOME vs AWAY · AH ±X[.Y] side"
                 try:
                     match, rest = label.rsplit(" · AH ", 1)
                     parts = rest.rsplit(" ", 1)
@@ -1014,20 +1015,41 @@ def _betting_payload(report_date: str) -> dict:
                 if outcome is None:
                     continue
                 hs, as_ = outcome
-                margin = hs - as_  # positive → home winning margin
-                # AH half-line settlement (no push): line is handicap on home team
-                # home covers iff (home_goals - away_goals) > -line
-                # i.e. iff margin + line > 0
+                margin = hs - as_
                 adjusted = margin + line
+                # Integer line: adjusted == 0 is a push (stake refunded).
+                # Half line: adjusted is never an integer w.r.t. ±0 → no push.
                 if side == "home":
-                    won = adjusted > 0
-                    push = adjusted == 0
-                else:  # away
-                    won = adjusted < 0
-                    push = adjusted == 0
+                    won, push = adjusted > 0, adjusted == 0
+                else:
+                    won, push = adjusted < 0, adjusted == 0
                 if push:
                     payout = 0.0
                 else:
+                    payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
+            elif " · OU " in label:
+                # label: "HOME vs AWAY · OU X[.Y] over|under"
+                try:
+                    match, rest = label.rsplit(" · OU ", 1)
+                    parts = rest.rsplit(" ", 1)
+                    line_str, side = parts[0], parts[1]
+                    home, away = match.split(" vs ", 1)
+                    line = float(line_str)
+                except (ValueError, IndexError):
+                    continue
+                if side not in ("over", "under"):
+                    continue
+                outcome = outcomes.get((date_key, home, away))
+                if outcome is None:
+                    continue
+                hs, as_ = outcome
+                total = hs + as_
+                # Integer line: total == line → push. Half line never pushes.
+                if total == line:
+                    payout = 0.0
+                else:
+                    over_wins = total > line
+                    won = over_wins if side == "over" else not over_wins
                     payout = stake * (float(bet.get("decimal_odds", 1.0)) - 1.0) if won else -stake
             else:
                 continue
@@ -1066,94 +1088,153 @@ def _betting_payload(report_date: str) -> dict:
     return out
 
 
-def _ah_opportunities(p: dict, match: str, kellymod) -> "list":
-    """AH opportunities for one fixture using the market-anchored 1X2 as the AH anchor.
+def _line_token(line: float) -> tuple[str, str]:
+    """Return (label_str, whitelist_key_suffix) for an AH/OU line.
 
-    The market_1x2 blend (60% Polymarket + 40% DC) already embeds bookmaker
-    consensus. For AH ±0.5 — the two walk-forward-validated half lines — the
-    mapping to market-implied AH probability is exact:
-      AH -0.5 home cover  ↔  home wins     → market implied = p_home_win
-      AH +0.5 home cover  ↔  home wins or draws → market implied = p_home_win + p_draw
-    Edge is derived.p_home (pure DC) minus this market-implied probability.
-    Without a live AH feed (P0.2b), this 1X2→AH proxy is the best available
-    free anchor; it is still valid as long as the market 1X2 is sharp.
+    Examples:
+      -0.5 → ("-0.5", "minus_0.5")
+      +1.0 → ("+1",   "plus_1")
+      0.0  → ("0",    "0")
+      2.5  → ("2.5",  "2.5")  (OU side; no sign)
     """
-    if not p.get("market_1x2") or "derived" not in p:
-        return []
-    mkt = p["market_1x2"]  # [p_home_win, p_draw, p_away_win]
-    p_h_mkt, p_d_mkt, p_a_mkt = float(mkt[0]), float(mkt[1]), float(mkt[2])
+    if line == 0:
+        return "0", "0"
+    sign_label = "-" if line < 0 else "+"
+    sign_key = "minus" if line < 0 else "plus"
+    mag = abs(line)
+    if mag == int(mag):                # integer line (push possible)
+        mag_str = str(int(mag))
+    else:
+        mag_str = f"{mag:.1f}".rstrip("0").rstrip(".")
+    return f"{sign_label}{mag_str}", f"{sign_key}_{mag_str}"
 
-    # AH market-implied probabilities for the supported half lines
-    # (exact mapping from 1X2; only lines ±0.5/±1.5 are whitelisted by Run 27)
-    _AH_MARKET_IMPLIED = {
-        -0.5: (p_h_mkt,              p_a_mkt + p_d_mkt),  # home must WIN
-        +0.5: (p_h_mkt + p_d_mkt,   p_a_mkt),             # home must NOT LOSE
-        -1.5: (None, None),  # needs goal-margin dist; skip — unreliable from 3-bucket
-        +1.5: (None, None),  # same
-    }
+
+def _ah_opportunities(p: dict, match: str, kellymod) -> list:
+    """AH opportunities derived via 1X2→λ_market inference (industry standard).
+
+    Steps:
+      1. Hold DC's ρ fixed; reverse-engineer (λ_h^M, λ_a^M) that reproduce the
+         market 1X2 exactly through the DC score grid.
+      2. DC's own (λ_h^DC, λ_a^DC) → model AH probabilities.
+      3. Market λ → market-implied AH probabilities (consistent with 1X2).
+      4. Edge = model − market on each AH line; Kelly stake on edges ≥ 3%.
+
+    Three lines per match: main = round-to-half(-(λ_h^DC - λ_a^DC)), plus
+    main ± 0.5. Lines clipped to [-3, +3].
+    """
+    from ..model import derived_markets as derived
+
+    if not p.get("market_1x2") or "lambda_home" not in p or "lambda_away" not in p:
+        return []
+    rho = float(p.get("rho", 0.0))
+    lam_h_dc, lam_a_dc = float(p["lambda_home"]), float(p["lambda_away"])
+
+    lams_m = derived.infer_market_lambdas(p["market_1x2"], lam_h_dc, lam_a_dc, rho)
+    if lams_m is None:
+        return []
+    lam_h_m, lam_a_m = lams_m
+
+    # main line = nearest half to -(home expected margin)
+    delta = lam_h_dc - lam_a_dc
+    main = max(-3.0, min(3.0, derived.round_to_half(-delta)))
+    lines = sorted({main - 0.5, main, main + 0.5})
 
     ops = []
-    for ah_entry in p["derived"].get("asian_handicap", []):
-        line = float(ah_entry["line"])
-        if line not in _AH_MARKET_IMPLIED:
+    for line in lines:
+        if line < -3.0 or line > 3.0:
             continue
-        p_mkt_home, p_mkt_away = _AH_MARKET_IMPLIED[line]
-        if p_mkt_home is None:
-            continue
-        for side, p_model, p_mkt_side, fair_key, mkt_key in (
-            ("home", ah_entry["p_home"], p_mkt_home,
-             "fair_home_odds", f"ah_{'minus' if line < 0 else 'plus'}_{abs(line):.1f}".replace(".0", "")),
-            ("away", ah_entry["p_away"], p_mkt_away,
-             "fair_away_odds", f"ah_{'minus' if line > 0 else 'plus'}_{abs(line):.1f}".replace(".0", "")),
-        ):
-            fair_odds = ah_entry.get(fair_key)
-            if not fair_odds or p_mkt_side <= 0:
+        model_ah = derived.asian_handicap(lam_h_dc, lam_a_dc, rho, line)
+        market_ah = derived.asian_handicap(lam_h_m,  lam_a_m,  rho, line)
+        line_label, line_key = _line_token(line)
+        market_key = f"ah_{line_key}"
+        for side in ("home", "away"):
+            p_model = float(model_ah[f"p_{side}"])
+            p_market = float(market_ah[f"p_{side}"])
+            if p_market <= 0 or p_model <= 0:
                 continue
-            sign = "minus" if line < 0 else "plus"
-            line_str = f"{'-' if line < 0 else '+'}{abs(line):.1f}".rstrip("0").rstrip(".")
-            label = f"{match} · AH {line_str} {side}"
-            # market odds = 1 / market-implied prob (de-vigged, from 1X2 anchor)
-            market_decimal = 1.0 / p_mkt_side
-            market_key = f"ah_{sign}_{str(abs(line)).rstrip('0').rstrip('.')}"
+            # market decimal odds: stake refunded on push; same fair-odds
+            # formula derived_markets._fair_odds uses, but priced off market λ.
+            p_push = float(market_ah["p_push"])
+            p_lose = max(0.0, 1.0 - p_market - p_push)
+            if p_market <= 1e-9:
+                continue
+            decimal_odds = round(1.0 + p_lose / p_market, 3)
+            label = f"{match} · AH {line_label} {side}"
             ops.append(kellymod.Opportunity(
-                label=label, p_win=float(p_model),
-                decimal_odds=market_decimal, p_market=p_mkt_side,
-                market=market_key,
+                label=label, p_win=p_model, decimal_odds=decimal_odds,
+                p_market=p_market, market=market_key,
             ))
     return ops
 
 
-def _ou_opportunities(p: dict, match: str, kellymod) -> "list":
-    """OU opportunities using the model's own fair price as the base.
+def _ou_opportunities(p: dict, match: str, kellymod) -> list:
+    """OU opportunities derived via 1X2→λ_market inference.
 
-    Without live OU odds (P0.2b deferred), we can only surface OU when the
-    model's DC fair price diverges from the 1X2-implied over probability.
-    For OU 2.5 (the primary validated line): the 1X2-implied over-2.5 ≈
-    p_home_win + p_away_win (goals only if someone wins by 2+) — a rough
-    proxy. This is lower confidence than AH, so OU ops are only included
-    when mode is 'both' or 'ou' explicitly. OU 1.5 is hard-blocked (Run 27).
+    Same pipeline as AH but on total goals: main = round-to-half(λ_h + λ_a),
+    three lines (main ± 0.5). Whitelist still hard-blocks OU 1.5 (Run 27).
     """
-    if "derived" not in p:
+    from ..model import derived_markets as derived
+
+    if not p.get("market_1x2") or "lambda_home" not in p or "lambda_away" not in p:
         return []
-    # Use the 1X2 market blend to approximate OU 2.5 market-implied prob.
-    # Over 2.5: any scoreline with total > 2. From 3-bucket:
-    # p_over_2.5 ≈ 1 - P(0-0) - P(1-0) - P(0-1) - P(1-1) - P(2-0) - P(0-2)
-    # This can't be derived cleanly from 1X2 alone — skip OU in proxy mode.
-    # OU is only useful once P0.2b provides real bookmaker OU lines.
-    return []
+    rho = float(p.get("rho", 0.0))
+    lam_h_dc, lam_a_dc = float(p["lambda_home"]), float(p["lambda_away"])
+
+    lams_m = derived.infer_market_lambdas(p["market_1x2"], lam_h_dc, lam_a_dc, rho)
+    if lams_m is None:
+        return []
+    lam_h_m, lam_a_m = lams_m
+
+    total = lam_h_dc + lam_a_dc
+    main = max(1.5, min(4.5, derived.round_to_half(total)))
+    lines = sorted({main - 0.5, main, main + 0.5})
+
+    ops = []
+    for line in lines:
+        if line < 1.5 or line > 4.5:
+            continue
+        model_ou = derived.over_under(lam_h_dc, lam_a_dc, rho, line)
+        market_ou = derived.over_under(lam_h_m,  lam_a_m,  rho, line)
+        # OU line key: no sign; integer vs half handled by _line_token's mag part
+        if line == int(line):
+            line_label, line_key = str(int(line)), str(int(line))
+        else:
+            line_label = f"{line:.1f}".rstrip("0").rstrip(".")
+            line_key = line_label
+        market_key = f"ou_{line_key}"
+        p_push = float(market_ou["p_push"])
+        for side in ("over", "under"):
+            p_model = float(model_ou[f"p_{side}"])
+            p_market = float(market_ou[f"p_{side}"])
+            if p_market <= 1e-9 or p_model <= 0:
+                continue
+            p_lose = max(0.0, 1.0 - p_market - p_push)
+            decimal_odds = round(1.0 + p_lose / p_market, 3)
+            label = f"{match} · OU {line_label} {side}"
+            ops.append(kellymod.Opportunity(
+                label=label, p_win=p_model, decimal_odds=decimal_odds,
+                p_market=p_market, market=market_key,
+            ))
+    return ops
 
 
 def _cmd_bet(args):
     """Generate today's recommended bet slate from the latest predictions.
 
     --mode controls which markets are included in the slate:
-      ah   (default) — Asian Handicap ±0.5 only, using the market_1x2 blend
-                        as the AH market-implied anchor (exact for half lines)
-      1x2             — 1X2 head-to-head vs Polymarket implied prices
-      both            — AH + 1X2 combined
+      ah     (default) — Asian Handicap, 3 dynamically-selected lines per match
+                          centred on the DC expected margin
+      ou               — Over/Under, 3 dynamically-selected lines centred on
+                          the DC expected total goals
+      ahou             — AH + OU combined (recommended for daily use; matches
+                          the layout of mainstream Asian books — see docs/guide.md)
+      1x2              — 1X2 head-to-head vs Polymarket implied prices
+      all              — 1X2 + AH + OU combined
 
-    Edge for AH is derived vs the 1X2-anchored market-implied AH probability.
-    Until P0.2b (live AH feed) lands, this is the best available free proxy.
+    Edge is derived from a 1X2 → λ_market inversion (industry standard,
+    Pinnacle / academic): hold DC's ρ fixed and solve for the market-implied
+    (λ_h, λ_a) that reproduces the de-vigged 1X2 exactly. Pricing AH/OU off
+    those market λ stays consistent with the 1X2 market across all lines.
     """
     from ..bet import kelly as kellymod
 
@@ -1163,14 +1244,17 @@ def _cmd_bet(args):
         print(f"no predictions at {preds_f} — run `predict --all` first", file=sys.stderr)
         sys.exit(1)
     preds = json.loads(preds_f.read_text())
-    mode = getattr(args, "mode", "ah")
+    mode = getattr(args, "mode", "ahou")
+    want_1x2 = mode in ("1x2", "all")
+    want_ah = mode in ("ah", "ahou", "all")
+    want_ou = mode in ("ou", "ahou", "all")
 
     ops: list[kellymod.Opportunity] = []
     for p in preds:
         if p.get("error") or "derived" not in p:
             continue
         match = f"{p['home']} vs {p['away']}"
-        if mode in ("1x2", "both") and p.get("market_1x2"):
+        if want_1x2 and p.get("market_1x2"):
             for i, side in enumerate(("home", "draw", "away")):
                 p_model = (p["p_home"], p["p_draw"], p["p_away"])[i]
                 p_market = p["market_1x2"][i]
@@ -1180,8 +1264,10 @@ def _cmd_bet(args):
                     label=f"{match} · 1X2 {side}",
                     p_win=p_model, decimal_odds=1.0 / p_market, p_market=p_market,
                 ))
-        if mode in ("ah", "both"):
+        if want_ah:
             ops.extend(_ah_opportunities(p, match, kellymod))
+        if want_ou:
+            ops.extend(_ou_opportunities(p, match, kellymod))
     out = kellymod.portfolio_kelly(ops, bankroll=args.bankroll)
 
     bets_dir = paths.REPORTS / "bets"
@@ -1274,8 +1360,10 @@ def main(argv=None):
     pbet = sub.add_parser("bet", help="Recommended bet slate from latest predictions")
     pbet.add_argument("--date", default=None, help="Report date (default: today)")
     pbet.add_argument("--bankroll", type=float, default=10000.0)
-    pbet.add_argument("--mode", default="ah", choices=["ah", "1x2", "both"],
-                      help="Markets to recommend: ah (default), 1x2, or both")
+    pbet.add_argument("--mode", default="ahou",
+                      choices=["ah", "ou", "ahou", "1x2", "all"],
+                      help="Markets to recommend: ahou (default; AH + OU), "
+                           "ah, ou, 1x2, or all")
     pbet.set_defaults(func=_cmd_bet)
 
     pb = sub.add_parser("backtest")

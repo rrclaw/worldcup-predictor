@@ -30,13 +30,27 @@ DEFAULT_MIN_FRACTION = 0.005    # 0.5% bankroll
 # fitting rule that protected the model in Runs 14/16/17.
 MARKET_WHITELIST = {
     "1x2": True,         # validated headline metric (Run 23, ECE 0.0144)
-    "ah_minus_1.5": True,
-    "ah_minus_0.5": True,
-    "ah_plus_0.5": True,
-    "ah_plus_1.5": True,
-    "ou_1.5": False,     # REJECTED — model Brier 0.005 worse than no-skill baseline
-    "ou_2.5": True,      # marginally accepted; flag low-confidence in cli bet
-    "ou_3.5": True,      # accepted but low-confidence
+    # AH half lines — directly validated in Run 27 for ±0.5/±1.5
+    "ah_minus_2.5": True,  # extended via λ-inference path; backtest pending (P3.4)
+    "ah_minus_1.5": True,  # validated Run 27
+    "ah_minus_0.5": True,  # validated Run 27
+    "ah_plus_0.5":  True,  # validated Run 27
+    "ah_plus_1.5":  True,  # validated Run 27
+    "ah_plus_2.5":  True,  # extended via λ-inference path; backtest pending (P3.4)
+    # AH integer lines — push-bearing; backtest pending (P3.4)
+    "ah_minus_2":   True,
+    "ah_minus_1":   True,
+    "ah_0":         True,
+    "ah_plus_1":    True,
+    "ah_plus_2":    True,
+    # OU lines
+    "ou_1.5": False,     # REJECTED Run 27 — model Brier 0.005 worse than baseline
+    "ou_2":   True,      # extended via λ-inference path; integer push line
+    "ou_2.5": True,      # validated Run 27 (low-confidence)
+    "ou_3":   True,      # extended; integer push line
+    "ou_3.5": True,      # validated Run 27 (low-confidence)
+    "ou_4":   True,      # extended; integer push line
+    "ou_4.5": True,      # extended via λ-inference path
 }
 
 
