@@ -1250,9 +1250,12 @@ def _cmd_bet(args):
     want_ah = mode in ("ah", "ahou", "all")
     want_ou = mode in ("ou", "ahou", "all")
 
+    target_date = rep.name  # YYYY-MM-DD of the requested report directory
     ops: list[kellymod.Opportunity] = []
     for p in preds:
         if p.get("error") or "derived" not in p:
+            continue
+        if p.get("date") != target_date:
             continue
         match = f"{p['home']} vs {p['away']}"
         if want_1x2 and p.get("market_1x2"):

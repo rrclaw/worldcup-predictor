@@ -318,8 +318,14 @@ def fetch_club_elo(force: bool = False) -> dict[str, float]:
 
     if CLUB_ELO_JSON.exists() and not force:
         return _json.loads(CLUB_ELO_JSON.read_text())
-    r = requests.get(CLUBELO_URL.format(date=_date.today().isoformat()), headers=UA, timeout=30)
-    r.raise_for_status()
+    try:
+        r = requests.get(CLUBELO_URL.format(date=_date.today().isoformat()), headers=UA, timeout=30)
+        r.raise_for_status()
+    except Exception:
+        # Network or server error — return stale cache if available, else empty
+        if CLUB_ELO_JSON.exists():
+            return _json.loads(CLUB_ELO_JSON.read_text())
+        return {}
     elo = {}
     for row in csv.DictReader(io.StringIO(r.text)):
         try:
