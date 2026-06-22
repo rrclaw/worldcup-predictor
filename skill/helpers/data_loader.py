@@ -306,13 +306,45 @@ def fetch_squads(force: bool = False, team_filter: set[str] | None = None) -> di
 
 
 CLUBELO_URL = "http://api.clubelo.com/{date}"
+CLUBELO_MIRROR_URL = (
+    "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025"
+    "/main/data/EloRatings.csv"
+)
 CLUB_ELO_JSON = paths.DATA / "club_elo.json"
 
 
+def _parse_clubelo_api_csv(text: str) -> dict[str, float]:
+    """Parse api.clubelo.com CSV: columns Club, Elo (among others)."""
+    import csv, io
+    elo = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            elo[row["Club"]] = round(float(row["Elo"]), 1)
+        except (ValueError, KeyError):
+            continue
+    return elo
+
+
+def _parse_clubelo_mirror_csv(text: str) -> dict[str, float]:
+    """Parse xgabora mirror CSV: columns date, club, country, elo — take latest per club."""
+    import csv, io
+    latest: dict[str, tuple[str, float]] = {}  # club -> (date, elo)
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            club, date_str, elo_val = row["club"], row["date"], float(row["elo"])
+        except (ValueError, KeyError):
+            continue
+        if club not in latest or date_str > latest[club][0]:
+            latest[club] = (date_str, round(elo_val, 1))
+    return {club: v[1] for club, v in latest.items()}
+
+
 def fetch_club_elo(force: bool = False) -> dict[str, float]:
-    """clubelo.com club Elo ratings (free, no key) → {club_name: elo}. Cached 7 days."""
-    import csv
-    import io
+    """clubelo.com club Elo ratings (free, no key) → {club_name: elo}. Cached 7 days.
+
+    Primary source: api.clubelo.com (live daily snapshot).
+    Fallback:       xgabora GitHub mirror (bi-monthly snapshots, latest ~2025-06-01).
+    """
     import json as _json
     import time
     from datetime import date as _date
@@ -322,24 +354,37 @@ def fetch_club_elo(force: bool = False) -> dict[str, float]:
         age = time.time() - CLUB_ELO_JSON.stat().st_mtime
         if age < _CACHE_TTL:
             return _json.loads(CLUB_ELO_JSON.read_text())
+
+    # 1. Try official API
     try:
         r = requests.get(CLUBELO_URL.format(date=_date.today().isoformat()), headers=UA, timeout=30)
         r.raise_for_status()
+        elo = _parse_clubelo_api_csv(r.text)
+        if elo:
+            _write_json_atomic(CLUB_ELO_JSON, _json.dumps(elo, ensure_ascii=False))
+            return elo
     except Exception as e:
-        # Network or server error — return stale cache (any age) if available, else empty
-        if CLUB_ELO_JSON.exists():
-            print(f"[clubelo] server unavailable ({e}), using cached data", file=__import__("sys").stderr)
-            return _json.loads(CLUB_ELO_JSON.read_text())
-        print(f"[clubelo] server unavailable ({e}), no cache — talent layer skipped", file=__import__("sys").stderr)
-        return {}
-    elo = {}
-    for row in csv.DictReader(io.StringIO(r.text)):
-        try:
-            elo[row["Club"]] = round(float(row["Elo"]), 1)
-        except (ValueError, KeyError):
-            continue
-    _write_json_atomic(CLUB_ELO_JSON, _json.dumps(elo, ensure_ascii=False))
-    return elo
+        print(f"[clubelo] primary API unavailable ({e}), trying mirror ...", file=__import__("sys").stderr)
+
+    # 2. Try GitHub mirror (bi-monthly snapshots, latest ~2025-06-01)
+    try:
+        r = requests.get(CLUBELO_MIRROR_URL, headers=UA, timeout=60)
+        r.raise_for_status()
+        elo = _parse_clubelo_mirror_csv(r.text)
+        if elo:
+            print(f"[clubelo] loaded {len(elo)} clubs from GitHub mirror", file=__import__("sys").stderr)
+            _write_json_atomic(CLUB_ELO_JSON, _json.dumps(elo, ensure_ascii=False))
+            return elo
+    except Exception as e2:
+        print(f"[clubelo] mirror also unavailable ({e2})", file=__import__("sys").stderr)
+
+    # 3. Stale cache (any age) as last resort
+    if CLUB_ELO_JSON.exists():
+        print("[clubelo] using stale local cache", file=__import__("sys").stderr)
+        return _json.loads(CLUB_ELO_JSON.read_text())
+
+    print("[clubelo] no data available — talent layer skipped", file=__import__("sys").stderr)
+    return {}
 
 
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
