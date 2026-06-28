@@ -663,3 +663,18 @@ Caught a swapped-score bug in the first cut (home/away points reversed when the 
 was home — scrambled standings) and fixed it. Verified: all 12 group winners now match the live
 table (D=USA, F=Netherlands, K=Colombia corrected); 4/6-played groups (J=Argentina, K=Colombia)
 rank correctly on real+expected. Auto-updates as the last 4 group games and the knockouts resolve.
+
+## Run 28 — per-match predictions for the knockout rounds (R32+)
+
+User: "do we have per-match predictions for the Round of 32?" We didn't — `predict` only ran over
+the 72 group fixtures (`load_wc2026_fixtures`); knockout matchups aren't in that list (they're
+results-determined), so the schedule view showed blank odds for every R32 game even where the
+teams were already decided.
+
+Fix: after the group fixtures, `predict` now also pulls the official bracket (football-data) and
+predicts every knockout matchup whose BOTH teams are known and in the model, at a neutral venue
+(no home advantage), de-duped against group fixtures. TBD slots are skipped until the teams
+resolve; each run re-fetches the bracket so new matchups appear as the tournament advances. These
+predictions carry `_generated_at` like the rest, so they flow into the no-hindsight live-accuracy
+scoreboard once played. First run produced odds for the 4 fully-decided R32 ties (e.g. Canada 59%
+over South Africa; Brazil 44% v Japan; Morocco 38% edge on Netherlands; USA 56% v Bosnia).

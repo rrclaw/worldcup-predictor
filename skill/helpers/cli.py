@@ -128,6 +128,32 @@ def _cmd_predict(args):
                                       match_markets, absences))
         except Exception as e:  # noqa: BLE001 — keep going on sparse teams
             preds.append({"fixture_id": row["fixture_id"], "error": str(e)})
+
+    # knockout matchups whose teams are already known (the official bracket fills in as
+    # groups finish) — predict them too, at a neutral venue, so the schedule shows per-match
+    # odds for R32 onward instead of blanks. TBD slots are skipped until the teams resolve;
+    # each run re-fetches the bracket, so new matchups appear as the tournament advances.
+    seen_pairs = {(p.get("home"), p.get("away")) for p in preds if not p.get("error")}
+    for m in data_loader.fetch_fd_matches():
+        if m.get("stage") in (None, "GROUP_STAGE"):
+            continue
+        h = data_loader.fd_canon((m.get("homeTeam") or {}).get("name"))
+        a = data_loader.fd_canon((m.get("awayTeam") or {}).get("name"))
+        if not (h and a) or h not in model.attack or a not in model.attack:
+            continue
+        if (h, a) in seen_pairs or (a, h) in seen_pairs:
+            continue
+        krow = {"home_team": h, "away_team": a, "neutral": True,
+                "fixture_id": f"ko-{m.get('id')}", "city": None, "country": None,
+                "date": pd.Timestamp(m.get("utcDate"))}
+        try:
+            kp = _predict_one(model, krow, squads, None, match_markets, absences)
+            kp["stage"] = m.get("stage")
+            preds.append(kp)
+            seen_pairs.add((h, a))
+        except Exception as e:  # noqa: BLE001
+            print(f"[ko predict skipped] {h} vs {a}: {e}", file=sys.stderr)
+
     # stamp the generation time (UTC) — live scoring only accepts forecasts proven to
     # be strictly pre-kickoff, so each archived row must carry when it was made.
     gen = pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")
