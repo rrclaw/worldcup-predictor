@@ -644,3 +644,22 @@ model) stays frozen — drift gate is "ok" at n=16 (p=0.27), no evidence to touc
 "optimisation" at this stage is *instrumented patience*: accumulate forward evidence, act only when
 two independent gates (forward ledger + backtest) agree. Verified: protocol returns accruing (<30),
 REVIEW only when forward-optimal beats current by the margin, ok when market≈model.
+
+## Run 27 — 出线树 (projected bracket) was ignoring actual group results — FIXED
+
+User (tournament day ~17, group stage 68/72 done): "does the bracket need updating — are the
+group results in?". Found it: `bracket.project()` ranked each group purely by the MODEL's expected
+points (`_group_table(model)`), **never reading the 68 played group matches**. 3 of 12 group
+winners were wrong vs reality — Group D showed Turkey (actual: USA), F showed Japan (actual:
+Netherlands), K showed Portugal (actual: Colombia) — and the whole downstream tree inherited the
+error. (The Monte Carlo sim was already result-conditioned from Run 24; only the single-path
+bracket projection had been missed.)
+
+Fix: `_group_table` now scores each group from ACTUAL points/GD/GF for played pairings and fills
+only the not-yet-played pairings with the model's expectation — a finished group reflects the real
+standings exactly, a partial group blends real+expected. Played knockout ties are likewise pinned
+to their real winner (penalty ties via shootouts.csv), with the score carried for the dashboard.
+Caught a swapped-score bug in the first cut (home/away points reversed when the pair's second team
+was home — scrambled standings) and fixed it. Verified: all 12 group winners now match the live
+table (D=USA, F=Netherlands, K=Colombia corrected); 4/6-played groups (J=Argentina, K=Colombia)
+rank correctly on real+expected. Auto-updates as the last 4 group games and the knockouts resolve.

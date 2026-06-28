@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from itertools import combinations
 
+import pandas as pd
+
 from ..model import dixon_coles as dc
 from .montecarlo import (
     OFFICIAL_GROUPS,
@@ -26,6 +28,7 @@ from .montecarlo import (
     _R32,
     _THIRD_MATCHES,
     _assign_thirds,
+    _shootout_winners,
 )
 
 _ROUND_NAMES = ["R32", "R16", "QF", "SF", "Final"]
@@ -40,33 +43,65 @@ def _eff_win(model, a: str, b: str) -> float:
     return mp["p_home"] + 0.5 * mp["p_draw"]
 
 
-def _group_table(model, teams: list[str]):
-    """Expected league points for each team in a round-robin. Returns the teams
-    ordered best-first plus the {team: xpts} map."""
-    xpts = {t: 0.0 for t in teams}
+def _played_map(fixtures) -> dict:
+    """{frozenset({home,away}): (home, away, home_score, away_score)} for every fixture
+    that already has a recorded score — so the projection reflects what actually happened."""
+    out = {}
+    if fixtures is None:
+        return out
+    for r in fixtures.itertuples():
+        hs = getattr(r, "home_score", None)
+        if hs is not None and not pd.isna(hs):
+            out[frozenset((r.home_team, r.away_team))] = (
+                r.home_team, r.away_team, int(hs), int(r.away_score))
+    return out
+
+
+def _group_table(model, teams: list[str], played: dict):
+    """Rank a group by ACTUAL points/GD/GF from matches already played, with the
+    not-yet-played pairings filled in by the model's expectation. A fully-played group
+    therefore reflects the real standings exactly; a partial group blends real + expected.
+    Returns (order best-first, {team: (pts, gd, gf)})."""
+    tab = {t: [0.0, 0.0, 0.0] for t in teams}   # points, goal-diff, goals-for
     for a, b in combinations(teams, 2):
-        mp = dc.match_probs(model, a, b, neutral=True)
-        xpts[a] += 3 * mp["p_home"] + mp["p_draw"]
-        xpts[b] += 3 * mp["p_away"] + mp["p_draw"]
-    order = sorted(teams, key=lambda t: -xpts[t])
-    return order, xpts
+        pm = played.get(frozenset((a, b)))
+        if pm:
+            h, _aw, hs, as_ = pm
+            x, y = (h, _aw)          # x = home team, y = away team
+            xs, ys = hs, as_         # x always carries the home score
+            tab[x][1] += xs - ys; tab[x][2] += xs
+            tab[y][1] += ys - xs; tab[y][2] += ys
+            if xs > ys:
+                tab[x][0] += 3
+            elif xs < ys:
+                tab[y][0] += 3
+            else:
+                tab[x][0] += 1; tab[y][0] += 1
+        else:
+            mp = dc.match_probs(model, a, b, neutral=True)
+            tab[a][0] += 3 * mp["p_home"] + mp["p_draw"]
+            tab[b][0] += 3 * mp["p_away"] + mp["p_draw"]
+    order = sorted(teams, key=lambda t: (-tab[t][0], -tab[t][1], -tab[t][2]))
+    return order, {t: tuple(tab[t]) for t in teams}
 
 
 def project(model, fixtures=None) -> dict:
-    """Build the single most-likely bracket from the fitted model.
+    """Build the single most-likely bracket, conditioned on results so far.
 
-    `fixtures` is accepted for signature parity with montecarlo.run but the
-    official A..L draw is authoritative here, so it is unused.
+    Group standings use actual results where played (model expectation fills the rest);
+    each knockout tie that has actually been played is pinned to its real winner. The
+    official A..L draw + slot map are authoritative for structure.
     """
+    played = _played_map(fixtures)
     winners, runners, thirds = {}, {}, {}
     for code, teams in OFFICIAL_GROUPS.items():
-        order, xpts = _group_table(model, teams)
+        order, xpts = _group_table(model, teams, played)
         winners[code] = order[0]
         runners[code] = order[1]
         thirds[code] = (order[2], xpts[order[2]])
 
-    # 8 best third-placed groups by expected points → official slot assignment
-    best_thirds = sorted(thirds, key=lambda c: -thirds[c][1])[:8]
+    # 8 best third-placed groups by (points, GD, GF) → official slot assignment
+    best_thirds = sorted(thirds, key=lambda c: thirds[c][1], reverse=True)[:8]
     qual = tuple(sorted(_GI[c] for c in best_thirds))
     assign = _assign_thirds(qual)            # group-index per third-slot (len 8)
     gi_team = {_GI[c]: thirds[c][0] for c in OFFICIAL_GROUPS}
@@ -102,17 +137,30 @@ def project(model, fixtures=None) -> dict:
     ]
 
     # reorder into bracket top→bottom order → the whole tree is now adjacent pairs
+    shoot = _shootout_winners()
     cur_pairs = [tuple(pair16[i]) for i in _R32_ORDER]   # 16 (home, away) ties
     rounds = []
     for ri, rname in enumerate(_ROUND_NAMES):
         matches, nxt = [], []
         for mi, (a, b) in enumerate(cur_pairs):
-            pa = _eff_win(model, a, b)
-            win = a if pa >= 0.5 else b
-            matches.append({"a": a, "b": b, "winner": win,
-                            "p": round(pa if win == a else 1 - pa, 4),
-                            "m": _MNUMS[ri][mi],
-                            "ta": tag.get(a, ""), "tb": tag.get(b, "")})
+            pm = played.get(frozenset((a, b)))
+            if pm:                                    # this tie was actually played
+                h, _aw, hs, as_ = pm
+                if hs != as_:
+                    win = h if hs > as_ else _aw
+                else:                                 # level → penalty shootout winner
+                    win = shoot.get((None, frozenset((a, b)))) or \
+                        next((shoot[k] for k in shoot if k[1] == frozenset((a, b))), None) or \
+                        (a if _eff_win(model, a, b) >= 0.5 else b)
+                rec = {"a": a, "b": b, "winner": win, "p": 1.0, "actual": True,
+                       "score": f"{hs}-{as_}"}
+            else:
+                pa = _eff_win(model, a, b)
+                win = a if pa >= 0.5 else b
+                rec = {"a": a, "b": b, "winner": win,
+                       "p": round(pa if win == a else 1 - pa, 4)}
+            rec.update(m=_MNUMS[ri][mi], ta=tag.get(a, ""), tb=tag.get(b, ""))
+            matches.append(rec)
             nxt.append(win)
         rounds.append({"round": rname, "matches": matches})
         cur_pairs = [(nxt[i], nxt[i + 1]) for i in range(0, len(nxt) - 1, 2)]
