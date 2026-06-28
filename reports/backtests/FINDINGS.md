@@ -678,3 +678,13 @@ resolve; each run re-fetches the bracket so new matchups appear as the tournamen
 predictions carry `_generated_at` like the rest, so they flow into the no-hindsight live-accuracy
 scoreboard once played. First run produced odds for the 4 fully-decided R32 ties (e.g. Canada 59%
 over South Africa; Brazil 44% v Japan; Morocco 38% edge on Netherlands; USA 56% v Bosnia).
+
+## Run 29 — pin the bracket's R32 to the official pairings once the group stage ends
+
+After the group stage finished, the projected tree had the right group winners but 4/16 R32 ties
+still differed from the official bracket — the residual from Run 6's approximate best-third slot
+assignment (eligibility-correct but not FIFA's exact Annex C table). Now that the real R32 is
+published, `project(official_r32=...)` replaces the approximate third assignment: each slot's
+winner/runner side is deterministic, so we look up the official pair containing it and pin the
+real opponent. Verified: the 出线树 R32 now matches the official bracket 16/16. (cli passes the
+LAST_32 pairings from football-data; falls back to the approximation pre-knockout.)

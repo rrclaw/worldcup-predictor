@@ -201,9 +201,15 @@ def _cmd_predict(args):
             for name, p in list(gb.items())[:6]:
                 print(f"  {name:<34} {p*100:5.1f}%")
 
-        # deterministic most-likely bracket (出线树) — single projected path to a champion
+        # deterministic most-likely bracket (出线树) — single projected path to a champion.
+        # once the group stage finishes, pass the official R32 pairings so the tree's
+        # third-place slots match FIFA's exact assignment instead of our approximation.
         from ..sim import bracket as bracketmod
-        bk = bracketmod.project(model, fixtures)
+        official_r32 = {frozenset((h, a)) for m in data_loader.fetch_fd_matches()
+                        if m.get("stage") == "LAST_32"
+                        and (h := data_loader.fd_canon((m.get("homeTeam") or {}).get("name")))
+                        and (a := data_loader.fd_canon((m.get("awayTeam") or {}).get("name")))}
+        bk = bracketmod.project(model, fixtures, official_r32=official_r32 or None)
         (paths.report_dir() / "bracket.json").write_text(
             json.dumps(bk, indent=2, ensure_ascii=False)
         )

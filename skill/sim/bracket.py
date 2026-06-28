@@ -85,12 +85,17 @@ def _group_table(model, teams: list[str], played: dict):
     return order, {t: tuple(tab[t]) for t in teams}
 
 
-def project(model, fixtures=None) -> dict:
+def project(model, fixtures=None, official_r32=None) -> dict:
     """Build the single most-likely bracket, conditioned on results so far.
 
     Group standings use actual results where played (model expectation fills the rest);
     each knockout tie that has actually been played is pinned to its real winner. The
     official A..L draw + slot map are authoritative for structure.
+
+    `official_r32` (set of frozenset({teamA, teamB})): once the group stage finishes the
+    real R32 pairings are published — pass them to replace our approximate best-third slot
+    assignment with the exact official matchups (anchored by the deterministic winner/
+    runner side). Each side's third opponent then matches FIFA's Annex C table exactly.
     """
     played = _played_map(fixtures)
     winners, runners, thirds = {}, {}, {}
@@ -115,7 +120,18 @@ def project(model, fixtures=None) -> dict:
             elif slot[0] == "RU":
                 pair16[mi][si] = runners[slot[1]]
     for k, (mi, _e) in enumerate(_THIRD_MATCHES):
-        pair16[mi][1] = gi_team[assign[k]]   # third slot is the away side
+        pair16[mi][1] = gi_team[assign[k]]   # third slot is the away side (approximate)
+
+    # once the official R32 is published, pin each tie's third opponent to the real one:
+    # the winner/runner side of every slot is deterministic, so look up the official pair
+    # that contains it and set the other side to the actual opponent (exact Annex C result).
+    if official_r32:
+        for mi, slots in enumerate(pair16):
+            anchor = slots[0]   # W or RU side — always resolved, never a third
+            opp = next((tuple(p - {anchor})[0] for p in official_r32
+                        if anchor in p and len(p) == 2), None)
+            if opp is not None:
+                pair16[mi][1] = opp
 
     # slot provenance tags (E1 = winner of Group E, C2 = runner-up, A3 = third) so the
     # dashboard can show WHERE each team comes from — makes the official tree legible.
