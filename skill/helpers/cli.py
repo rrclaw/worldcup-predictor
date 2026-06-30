@@ -927,7 +927,9 @@ def _cmd_publish(args):
                   for t in [m["team"] for m in movers[:20]]}
         data["movement"] = {"since": dates[max(0, len(dates) - 8)], "as_of": dates[-1],
                             "top_movers": movers[:20], "market_series": series}
-    (paths.SITE / "data.json").write_text(json.dumps(data, ensure_ascii=False))
+    # atomic write: a visitor (or the http.server) must never read a half-written
+    # data.json mid-publish — that truncation breaks the dashboard's JSON.parse.
+    data_loader._write_json_atomic(paths.SITE / "data.json", json.dumps(data, ensure_ascii=False))
     print(f"published -> {paths.SITE / 'data.json'} "
           f"({len(data['predictions'])} fixtures, sim={'yes' if sim_f.exists() else 'no'}, "
           f"market={'yes' if data.get('market_title') else 'no'})")

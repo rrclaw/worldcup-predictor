@@ -688,3 +688,12 @@ published, `project(official_r32=...)` replaces the approximate third assignment
 winner/runner side is deterministic, so we look up the official pair containing it and pin the
 real opponent. Verified: the 出线树 R32 now matches the official bracket 16/16. (cli passes the
 LAST_32 pairings from football-data; falls back to the approximation pre-knockout.)
+
+## Run 30 — atomic publish of site/data.json (fixes intermittent truncated-JSON on the live site)
+
+`publish` wrote `site/data.json` with a plain `write_text`, while the http.server serves that same
+file to visitors. When a review republishes (~11×/day) a reader landing mid-write gets a truncated
+file → the dashboard's JSON.parse throws → blank/broken page. Observed twice as "Unterminated
+string" on the public fetch (local file always intact; re-fetch fine). The cache writes were made
+atomic earlier (Run 24) but this hottest path was missed. Fix: publish now uses
+`_write_json_atomic` (tmp + os.replace), so readers always see a complete file.
