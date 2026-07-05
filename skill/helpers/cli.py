@@ -553,6 +553,7 @@ def _cmd_review(args):
 
     data_loader.fetch_historical(force=True)  # pull latest scores
     data_loader.fetch_fd_matches(force=True)  # refresh official schedule + live scores/knockout teams
+    data_loader.fetch_shootouts(force=True)   # refresh pen-shootout winners (pins drawn KO ties)
     hist = data_loader.fetch_historical()
     played = hist[
         (hist["tournament"] == paths.WC2026_TOURNAMENT)

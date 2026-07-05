@@ -128,6 +128,21 @@ def fetch_goalscorers(force: bool = False) -> pd.DataFrame:
     return df.dropna(subset=["date", "scorer"])
 
 
+MARTJ42_SHOOTOUTS_URL = (
+    "https://raw.githubusercontent.com/martj42/international_results/master/shootouts.csv"
+)
+SHOOTOUTS_CSV = paths.HISTORICAL / "shootouts.csv"
+
+
+def fetch_shootouts(force: bool = False) -> None:
+    """martj42 penalty-shootout winners — needed to pin drawn knockout ties to the real
+    advancer (a draw in results.csv only says a tie went to pens; this says who won).
+    Refreshed every review, else the bracket falls back to the model on shootout games."""
+    if force or not SHOOTOUTS_CSV.exists():
+        _refresh_csv(MARTJ42_SHOOTOUTS_URL, SHOOTOUTS_CSV, min_rows=100,
+                     required={"date", "home_team", "away_team", "winner"})
+
+
 def load_wc2026_fixtures() -> pd.DataFrame:
     """Future WC2026 rows (scores still NA) = the fixture list to predict."""
     df = fetch_historical()

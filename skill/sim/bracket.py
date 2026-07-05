@@ -153,7 +153,12 @@ def project(model, fixtures=None, official_r32=None) -> dict:
     ]
 
     # reorder into bracket top→bottom order → the whole tree is now adjacent pairs
-    shoot = _shootout_winners()
+    # shootout winners keyed by team-pair, keeping the MOST RECENT result — two nations can
+    # meet on penalties in different years (e.g. Australia-Egypt 1987 and 2026), and a
+    # pair-only lookup must return this tournament's, not an old one.
+    shoot_by_pair = {}
+    for (dt, pair), w in sorted(_shootout_winners().items(), key=lambda kv: kv[0][0]):
+        shoot_by_pair[pair] = w   # later (newer) date overwrites
     cur_pairs = [tuple(pair16[i]) for i in _R32_ORDER]   # 16 (home, away) ties
     rounds = []
     for ri, rname in enumerate(_ROUND_NAMES):
@@ -165,8 +170,7 @@ def project(model, fixtures=None, official_r32=None) -> dict:
                 if hs != as_:
                     win = h if hs > as_ else _aw
                 else:                                 # level → penalty shootout winner
-                    win = shoot.get((None, frozenset((a, b)))) or \
-                        next((shoot[k] for k in shoot if k[1] == frozenset((a, b))), None) or \
+                    win = shoot_by_pair.get(frozenset((a, b))) or \
                         (a if _eff_win(model, a, b) >= 0.5 else b)
                 rec = {"a": a, "b": b, "winner": win, "p": 1.0, "actual": True,
                        "score": f"{hs}-{as_}"}

@@ -697,3 +697,16 @@ file → the dashboard's JSON.parse throws → blank/broken page. Observed twice
 string" on the public fetch (local file always intact; re-fetch fine). The cache writes were made
 atomic earlier (Run 24) but this hottest path was missed. Fix: publish now uses
 `_write_json_atomic` (tmp + os.replace), so readers always see a complete file.
+
+## Run 31 — bracket 出线树: fix stale + wrong-year shootout winners on drawn KO ties
+
+出线树 R32 pinned all 16 ties to real results, but the 3 penalty-shootout ties resolved wrong:
+Germany-Paraguay, Netherlands-Morocco, Australia-Egypt (all 1-1 → pens) advanced the WRONG team.
+Two bugs: (1) `shootouts.csv` was never refreshed by the review loop — the cached copy (from
+tournament start) had none of these games, so the draw fell back to the model favourite. Fixed:
+`fetch_shootouts(force=True)` runs every review (atomic + validated, like the other feeds).
+(2) After refresh, Australia-Egypt still resolved to Australia — a pair-only lookup hit the 1987
+Australia-Egypt shootout (Australia won) instead of the 2026 one (Egypt won). Fixed: shootout map
+keyed by team-pair keeps the most RECENT date. Verified: all 3 pen ties now advance the real winner
+(Paraguay, Morocco, Egypt). Live-accuracy 1X2 scoring already had the right result (from FD); this
+was only the bracket's single-path winner.
